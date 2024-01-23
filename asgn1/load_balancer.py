@@ -1,8 +1,9 @@
 import socket
 import os
+from consistent_hashing import consistentHash
 
-# Fetch server_id from environment variable
-server_id = os.environ.get('SERVER_ID', 'Unknown')
+# Fetch server_id from environment variable (0 for load balancer)
+server_id = 0
 
 # Thread function
 def handle_client(c):
@@ -17,25 +18,49 @@ def handle_client(c):
     request_type, request_method = message.split(' ')
     
     if request_type == 'GET':
-        if request_method == '/home':
-            response = home()
-        elif request_method == '/heartbeat':
-            response = heartbeat()
+        if request_method == '/rep':
+            response = rep()
+        elif request_method[0] == '/':
+            response = path()
         else:
             response = not_found()
     else:
         response = not_found()
+    
+    if request_type == 'POST':
+        if request_method == '/add':
+            response = add()
+        elif request_method == '/rm':
+            response = rm()
+        else:
+            response = not_found()
 
     print('Sending response:', response)
     c.send(response.encode())
 
     c.close()
 
+def add():
+    # add instance to consistent hash data structure
+    
+    for names in message:
+        serverHash.addInstance(names)
+    
+    pass
+
+def rm():
+    # remove instance from consistent hash data structure
+    pass
+
+def rep():
+    # print status of consistent hash data structure
+    pass
+
 def home():
     response = f"message: Hello from Server: {server_id}, status: successful, code: 200"
     return response
 
-def heartbeat():
+def path():
     response = "message: '', status: '', code: 200"
     return response
 
