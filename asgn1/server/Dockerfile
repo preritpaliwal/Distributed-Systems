@@ -17,3 +17,4 @@ ENTRYPOINT  [ "python3" ]
 CMD [ "server.py"]
 
 # docker run --rm -p 5001:5000 --name server1 -e serverID=111 server
+# cat /proc/self/cgroup

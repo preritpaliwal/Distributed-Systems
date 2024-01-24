@@ -16,7 +16,6 @@ load = {}
 def rep():
     
     replicas = mapper.getReplicas()
-    
     return app.response_class(
         response = json.dumps({
             "message" : {
@@ -55,7 +54,10 @@ def add():
         )
         
     # TODO - add instances
-    
+    # for hostname in hostnames:
+    #     res = os.popen(f"sudo docker run --name {hostname} -d -p {port}:5000 -e serverID={hostname} server").read()
+    #     print(res)
+        #
     replicas = mapper.addServer(n, hostnames)
     
     return app.response_class(
@@ -113,10 +115,9 @@ def rm():
     
 @app.route("/<path>", methods = ["GET"])
 def serveClient(path):
-    
     requestID = random.randint(100000, 999999)
     server, rSlot = mapper.addRequest(requestID)
-    
+    print(path, server, rSlot, flush=True)
     if(rSlot is None):
         print("HashTable full", requestID)
         return app.response_class(
@@ -127,9 +128,9 @@ def serveClient(path):
         )
     
     server2port = {
-        "Server 1" : 5001,
-        "Server 2" : 5002,
-        "Server 3" : 5003,
+        "Server 1" : "5001",
+        "Server 2" : "5002",
+        "Server 3" : "5003",
     }
     
     if server in load.keys():
@@ -140,10 +141,11 @@ def serveClient(path):
     with open("load.json", 'w') as f:
         json.dump(load, f)
     
-    print(f"{requestID} served by {server}")
-    
+    print(f"#########\n\n{requestID} served by {server}\n\n\n###############\n\n",flush=True)
     try:
-        response = requests.get(f"http://127.0.0.1:{server2port[server]}/{path}")
+        req = f"http://127.0.0.1:{server2port[server]}/{path}"
+        print(req, flush=True)
+        response = requests.get(req)
         mapper.clearRequest(rSlot)
     
     except:

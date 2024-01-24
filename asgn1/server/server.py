@@ -1,7 +1,9 @@
 from flask import Flask, json
-import sys, os
+import sys, os, socket
 
+# serverID = socket.gethostname()
 serverID = os.environ['serverID']
+
 app = Flask(__name__)
 app.config['DEBUG'] = True
 
