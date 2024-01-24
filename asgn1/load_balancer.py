@@ -1,6 +1,6 @@
 import socket
 import os
-from consistent_hashing import consistentHash
+from load_balancer.consistent_hashing import consistentHash
 
 # Fetch server_id from environment variable (0 for load balancer)
 server_id = 0

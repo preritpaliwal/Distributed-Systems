@@ -1,4 +1,4 @@
-from flask import Flask, request, json
+from flask import Flask, json
 import sys
 
 serverID = None
@@ -10,7 +10,7 @@ def home():
     
     return app.response_class(
         response = json.dumps({
-            "message" : f"Hello from Server: {serverID}",
+            "message" : f"Hello from Server: [{serverID}]",
             "status" : "successful"
             }),
         status = 200

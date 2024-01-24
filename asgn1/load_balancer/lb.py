@@ -1,13 +1,39 @@
 from flask import Flask, request, json
-import sys
+from consistent_hashing import consistentHash
+import sys, random
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
 
+mapper = consistentHash(num_servers = 3, num_slots = 512, num_virtual_servers = 9)
+
+@app.route("/", methods=["GET"])
+def serveClient():
+    
+    requestID = random.randint(100000, 999999)
+    server, rSlot = mapper.addRequest(requestID)
+    
+    print(f"{requestID} served by {server}")
+    
+    return app.response_class(
+        response = json.dumps({"abc" : "xyz"}),
+        status = 200
+    )
+
 @app.route("/rep", methods=["GET"])
 def rep():
-    pass
-
+    
+    replicas = mapper.getReplicas()
+    
+    return app.response_class(
+        response = json.dumps({
+            "message" : {
+                "N" : len(replicas),
+                "replicas" : replicas
+            }
+        }),
+        status = 200
+    )
 
 # curl -X POST "http://127.0.0.1:5000/add" -H "Content-Type: application/json" -d "@payload.json"
 
@@ -28,7 +54,7 @@ def add():
     n = int(payload['n'])
     hostnames = payload['hostnames']
     
-    if(n != len(hostnames)):
+    if(n < len(hostnames)):
         return app.response_class(
             response = json.dumps({
                 "message" : "<Error> Length of hostname list is more than newly added instances",
@@ -37,14 +63,15 @@ def add():
             status = 400
         )
         
-    
     # TODO - add instances
+    
+    replicas = mapper.addServer(n, hostnames)
     
     return app.response_class(
         response = json.dumps({
             "message" : {
-                "N" : -1, # Value of N
-                "replicas" : [] # Server Names
+                "N" : len(replicas),
+                "replicas" : replicas
             },
             "status" : "successful"
         }),
@@ -68,7 +95,7 @@ def rm():
     n = int(payload['n'])
     hostnames = payload['hostnames']
     
-    if(n != len(hostnames)):
+    if(n < len(hostnames)):
         return app.response_class(
             response = json.dumps({
                 "message" : "<Error> Length of hostname list is more than removable instances",
@@ -76,8 +103,22 @@ def rm():
             }),
             status = 400
         )
+        
+    print("Calling deleteServers")
+    replicas = mapper.deleteServer(n, hostnames)
     
     # TODO - delete instances
+    
+    return app.response_class(
+        response = json.dumps({
+            "message" : {
+                "N" : len(replicas),
+                "replicas" : replicas
+            },
+            "status" : "successful"
+        }),
+        status = 200
+    )
 
 @app.route("/<path>", methods = ["GET"])
 def other(path):
