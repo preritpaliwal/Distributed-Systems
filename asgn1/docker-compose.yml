@@ -1,0 +1,27 @@
+version: 3.9
+
+services:
+  
+  load_balancer:
+    build: ./load_balancer
+    image: load_balancer
+    container_name: load_balancer
+    ports:
+      - "5000:5000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    privileged: true
+    networks:
+      asgn1_net:
+        aliases:
+          - load_balancer
+  
+  server:
+    build: ./server
+    image: server
+    deploy:
+      mode: replicated
+      replicas: 3
+      ports:
+      - "12345:5000"
+      

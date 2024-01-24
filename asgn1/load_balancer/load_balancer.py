@@ -1,24 +1,16 @@
 from flask import Flask, request, json
 from consistent_hashing import consistentHash
-import sys, random
+import sys, random, logging, requests
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
+log = logging.getLogger('werkzeug')
+log.disabled = True
+
+# curl -X POST "http://127.0.0.1:5000/add" -H "Content-Type: application/json" -d "@payload.json"
 
 mapper = consistentHash(num_servers = 3, num_slots = 512, num_virtual_servers = 9)
-
-@app.route("/", methods=["GET"])
-def serveClient():
-    
-    requestID = random.randint(100000, 999999)
-    server, rSlot = mapper.addRequest(requestID)
-    
-    print(f"{requestID} served by {server}")
-    
-    return app.response_class(
-        response = json.dumps({"abc" : "xyz"}),
-        status = 200
-    )
+load = {}
 
 @app.route("/rep", methods=["GET"])
 def rep():
@@ -35,7 +27,6 @@ def rep():
         status = 200
     )
 
-# curl -X POST "http://127.0.0.1:5000/add" -H "Content-Type: application/json" -d "@payload.json"
 
 @app.route("/add", methods=["POST"])
 def add():
@@ -119,20 +110,56 @@ def rm():
         }),
         status = 200
     )
-
+    
 @app.route("/<path>", methods = ["GET"])
-def other(path):
-    print(path)
+def serveClient(path):
+    
+    requestID = random.randint(100000, 999999)
+    server, rSlot = mapper.addRequest(requestID)
+    
+    if(rSlot is None):
+        print("HashTable full", requestID)
+        return app.response_class(
+            response = json.dumps({
+                "message" : "HashTable Full"
+            }),
+            status = 400
+        )
+    
+    server2port = {
+        "Server 1" : 5001,
+        "Server 2" : 5002,
+        "Server 3" : 5003,
+    }
+    
+    if server in load.keys():
+        load[server] += 1
+    else:
+        load[server] = 1
+        
+    with open("load.json", 'w') as f:
+        json.dump(load, f)
+    
+    print(f"{requestID} served by {server}")
+    
+    try:
+        response = requests.get(f"http://127.0.0.1:{server2port[server]}/{path}")
+        mapper.clearRequest(rSlot)
+    
+    except:
+        
+        # TODO - Server Down, Respawn
+        
+        response = requests.get(f"http://127.0.0.1:{server2port[server]}/{path}")
+        mapper.clearRequest(rSlot)
+    
     
     return app.response_class(
-        response = json.dumps({
-            "message" : f"<Error> '/{path}' endpoint does not exist in server replicas",
-            "status" : "failure"
-            }),
-        status = 400
+        response = response.json(),
+        status = response.status_code
     )
 
 if __name__ == "__main__":
-    
+        
     app.run( host = "0.0.0.0", port = 5000, debug = True)
     

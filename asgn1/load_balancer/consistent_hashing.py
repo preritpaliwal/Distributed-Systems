@@ -1,4 +1,5 @@
 import math, random
+from hashlib import md5, sha1, sha256
 
 class consistentHash():
 
@@ -16,10 +17,21 @@ class consistentHash():
         
         self.addServer(self.N, [ f"Server {i}" for i in range(1, self.N+1) ])
     
+    def __power(self, a, exp, mod):
+        res = 1
+        while exp > 1:
+            if exp & 1:
+                res = (res * a) % mod
+            a = a ** 2 % mod
+            exp >>= 1
+        return (a * res) % mod
+    
     def __h(self, i):
-        return (i+1) ** 2 + 16
+        # return __power(37, i, self.M)
+        return i*i + 2*i + 17
     
     def __phi(self, i, j):
+        # return __power(37, __power(i, j, 97), self.M)
         return i ** 2 + (j+1) ** 2 + 24
     
     def getReplicas(self):
@@ -36,15 +48,24 @@ class consistentHash():
         
     def addRequest(self, RequestID):
         
+        # rSlot = md5("Request_" + str(RequestID)) % self.M
+        # rSlot = sha1("Request_" + str(RequestID)) % self.M
+        # rSlot = sha256("Request_" + str(RequestID)) % self.M
+        
         rSlot = self.H(RequestID) % self.M
         
         rSlot = self.__addEntity(self.requestRing, rSlot, f"R_{RequestID}")
+        
+        if rSlot is None:
+            return -1, None
+        
         server = None
         
         for i in range(self.M):
             if self.serverRing[(rSlot+i) % self.M] is not None:
                 server = self.serverRing[(rSlot + i) % self.M].split("_")[0]
                 break
+            
         
         return server, rSlot
         
@@ -69,6 +90,10 @@ class consistentHash():
             
             for j in range(1, self.K+1):
                 
+                # sSlot = md5(server + "_" + str(j)) % self.M
+                # sSlot = sha1(server + "_" + str(j)) % self.M
+                # sSlot = sha256(server + "_" + str(j)) % self.M
+        
                 sSlot = self.Phi(i, j) % self.M
                 self.__addEntity(self.serverRing, sSlot, f"{server}_{j}")
         
@@ -79,7 +104,12 @@ class consistentHash():
         i = self.__getServerNumber(server)
                 
         for j in range(1, self.K+1):
+            
             sSlot = self.Phi(i, j) % self.M
+            # sSlot = md5(server + "_" + str(j)) % self.M
+            # sSlot = sha1(server + "_" + str(j)) % self.M
+            # sSlot = sha256(server + "_" + str(j)) % self.M
+            
             vServerName = f"{server}_{j}"
     
             for k in range(self.M):
