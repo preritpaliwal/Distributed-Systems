@@ -166,6 +166,7 @@ def serveClient(path):
         response = requests.get(req)
         print(response, flush=True)
         mapper.clearRequest(rSlot)
+        return response.json(), response.status_code
     
     except:
         
