@@ -28,10 +28,12 @@ class consistentHash():
     
     def __h(self, i):
         # return __power(37, i, self.M)
+        # return int(sha256(f"Request_{i}".encode()).hexdigest(),16)
         return i*i + 2*i + 17
     
     def __phi(self, i, j):
         # return __power(37, __power(i, j, 97), self.M)
+        # return int(sha256(f"Server_{i}_{j}".encode()).hexdigest(),16)
         return i ** 2 + (j+1) ** 2 + 24
     
     def getReplicas(self):

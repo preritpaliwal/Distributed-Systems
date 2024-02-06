@@ -7,13 +7,13 @@ app.config['DEBUG'] = True
 log = logging.getLogger('werkzeug')
 log.disabled = True
 
-# curl -X POST "http://127.0.0.1:5000/add" -H "Content-Type: application/json" -d "@payload.json"
+# curl -X POST "http://127.0.0.1:5000/add" -H "Content-Type: application/json" -d @add.json
 
 os.popen(f'docker run --name Server_1 --network mynet --network-alias Server_1 -e serverID=1 -d server:latest').read()
 os.popen(f'docker run --name Server_2 --network mynet --network-alias Server_2 -e serverID=2 -d server:latest').read()
-os.popen(f'docker run --name Server_3 --network mynet --network-alias Server_3 -e serverID=3 -d server:latest').read()
+# os.popen(f'docker run --name Server_3 --network mynet --network-alias Server_3 -e serverID=3 -d server:latest').read()
 
-mapper = consistentHash(num_servers = 3, num_slots = 512, num_virtual_servers = 9)
+mapper = consistentHash(num_servers = 2, num_slots = 512, num_virtual_servers = 9)
 load = {}
 
 @app.route("/rep", methods=["GET"])
