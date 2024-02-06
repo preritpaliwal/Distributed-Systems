@@ -13,49 +13,49 @@ services:
     privileged: true
     networks:
       mynet:
-        ipv4_address: 192.168.92.20
         aliases:
           - load_balancer
   
-  server:
-    build: ./server
-    image: server
-    container_name: server1
-    environment:
-      - serverID=1
-    ports:
-      - "5001:5000"
-    # networks:
-    #   mynet:
-    #     ipv4_address: 192.168.92.21
+  # server:
+  #   build: ./server
+  #   image: server
+  #   container_name: server1
+  #   environment:
+  #     - serverID=1
+  #   ports:
+  #     - "5001:5000"
+  #   # networks:
+  #   #   mynet:
+  #   #     ipv4_address: 192.168.92.21
   
-  server2:
-    build: ./server
-    image: server
-    container_name: server2
-    environment:
-      - serverID=2
-    ports:
-      - "5002:5000"
-  #   networks:
-  #     mynet:
-  #       ipv4_address: 192.168.92.22
+  # server2:
+  #   build: ./server
+  #   image: server
+  #   container_name: server2
+  #   environment:
+  #     - serverID=2
+  #   ports:
+  #     - "5002:5000"
+  # #   networks:
+  # #     mynet:
+  # #       ipv4_address: 192.168.92.22
   
-  server3:
-    build: ./server
-    image: server
-    container_name: server3
-    environment:
-      - serverID=3
-    ports:
-      - "5003:5000"
-  #   networks:
-  #     mynet:
-  #       ipv4_address: 192.168.92.23
+  # server3:
+  #   build: ./server
+  #   image: server
+  #   container_name: server3
+  #   environment:
+  #     - serverID=3
+  #   ports:
+  #     - "5003:5000"
+  # #   networks:
+  # #     mynet:
+  # #       ipv4_address: 192.168.92.23
 
 networks:
   mynet:
-    ipam:
-      driver: default
-      config:
-        - subnet: "192.168.92.0/24"
+    name: mynet
+    # ipam:
+    #   driver: default
+    #   config:
+    #     - subnet: "192.168.92.0/24"

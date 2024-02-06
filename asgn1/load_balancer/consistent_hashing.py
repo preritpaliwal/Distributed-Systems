@@ -15,7 +15,7 @@ class consistentHash():
         self.serverRing = [ None for i in range(self.M) ]
         self.requestRing = [ None for i in range(self.M) ]
         
-        self.addServer(self.N, [ f"Server {i}" for i in range(1, self.N+1) ])
+        self.addServer(self.N, [ f"Server_{i}" for i in range(1, self.N+1) ])
     
     def __power(self, a, exp, mod):
         res = 1
@@ -63,7 +63,8 @@ class consistentHash():
         
         for i in range(self.M):
             if self.serverRing[(rSlot+i) % self.M] is not None:
-                server = self.serverRing[(rSlot + i) % self.M].split("_")[0]
+                _, number, _ = self.serverRing[(rSlot + i) % self.M].split("_")
+                server = f"Server_{number}"
                 break
             
         
@@ -79,7 +80,7 @@ class consistentHash():
                 return int(server[i:])
 
     def addServer(self, n, serverList):
-        
+        # done in load balancer
         # TODO - check if desired names can be used for servers
         # TODO - start n - len(serverList) additional servers
         

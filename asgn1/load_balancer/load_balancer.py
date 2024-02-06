@@ -1,6 +1,6 @@
 from flask import Flask, request, json
 from consistent_hashing import consistentHash
-import sys, random, logging, requests
+import random, logging, requests, os
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
@@ -8,6 +8,10 @@ log = logging.getLogger('werkzeug')
 log.disabled = True
 
 # curl -X POST "http://127.0.0.1:5000/add" -H "Content-Type: application/json" -d "@payload.json"
+
+os.popen(f'docker run --name Server_1 --network mynet --network-alias Server_1 -e serverID=1 -d server:latest').read()
+os.popen(f'docker run --name Server_2 --network mynet --network-alias Server_2 -e serverID=2 -d server:latest').read()
+os.popen(f'docker run --name Server_3 --network mynet --network-alias Server_3 -e serverID=3 -d server:latest').read()
 
 mapper = consistentHash(num_servers = 3, num_slots = 512, num_virtual_servers = 9)
 load = {}
@@ -52,13 +56,26 @@ def add():
             }),
             status = 400
         )
+    
+    currentReplicas = mapper.getReplicas()
+    newNames = []
+    for hostname in hostnames:
+        if hostname not in currentReplicas:
+            newNames.append(hostname)
+    
+    for i in range(n-len(newNames)):
+        for j in range(n+len(currentReplicas)):
+            if f"Server_{j}" not in currentReplicas and f"Server_{j}" not in newNames:
+                newNames.append(f"Server_{j}")
+                break
+    
+    # sanity check
+    print(len(newNames), newNames, flush=True)
+    for name in newNames:
+        _,server_id= name.split("_")
+        container = os.popen(f'docker run --name {name} --network mynet --network-alias {name} -e serverID={server_id} -d server:latest').read()
         
-    # TODO - add instances
-    # for hostname in hostnames:
-    #     res = os.popen(f"sudo docker run --name {hostname} -d -p {port}:5000 -e serverID={hostname} server").read()
-    #     print(res)
-        #
-    replicas = mapper.addServer(n, hostnames)
+    replicas = mapper.addServer(n, newNames)
     
     return app.response_class(
         response = json.dumps({
@@ -115,6 +132,13 @@ def rm():
     
 @app.route("/<path>", methods = ["GET"])
 def serveClient(path):
+    if(path == "favicon.ico"):
+        
+        return app.response_class(
+            response = None,
+            status = 200
+        )
+    
     requestID = random.randint(100000, 999999)
     server, rSlot = mapper.addRequest(requestID)
     print(path, server, rSlot, flush=True)
@@ -127,12 +151,6 @@ def serveClient(path):
             status = 400
         )
     
-    server2port = {
-        "Server 1" : "5001",
-        "Server 2" : "5002",
-        "Server 3" : "5003",
-    }
-    
     if server in load.keys():
         load[server] += 1
     else:
@@ -143,16 +161,18 @@ def serveClient(path):
     
     print(f"#########\n\n{requestID} served by {server}\n\n\n###############\n\n",flush=True)
     try:
-        req = f"http://127.0.0.1:{server2port[server]}/{path}"
+        req = f"http://{server}:5000/{path}"
         print(req, flush=True)
         response = requests.get(req)
+        print(response, flush=True)
         mapper.clearRequest(rSlot)
     
     except:
         
         # TODO - Server Down, Respawn
-        
-        response = requests.get(f"http://127.0.0.1:{server2port[server]}/{path}")
+        req = f"http://{server}:5000/{path}"
+        response = requests.get(req)
+        print(response, flush=True)
         mapper.clearRequest(rSlot)
     
     

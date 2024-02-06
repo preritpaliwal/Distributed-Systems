@@ -9,7 +9,7 @@ app.config['DEBUG'] = True
 
 @app.route("/home", methods=["GET"])
 def home():
-    
+    print("home function called", serverID,flush=True)
     return app.response_class(
         response = json.dumps({
             "message" : f"Hello from Server: [{serverID}]",
@@ -23,7 +23,7 @@ def heartbeat():
     
     return app.response_class(
         response = None,
-        status = 200
+        status = 201
     )
     
 @app.route("/<path>", methods = ["GET"])
