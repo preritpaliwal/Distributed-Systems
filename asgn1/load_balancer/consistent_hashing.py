@@ -49,7 +49,7 @@ class consistentHash():
     def addRequest(self, RequestID):
         
         # rSlot = md5("Request_" + str(RequestID)) % self.M
-        # rSlot = sha1("Request_" + str(RequestID)) % self.M
+        # rSlot = sha1("Request_    " + str(RequestID)) % self.M
         # rSlot = sha256("Request_" + str(RequestID)) % self.M
         
         rSlot = self.H(RequestID) % self.M
@@ -107,7 +107,7 @@ class consistentHash():
         for j in range(1, self.K+1):
             
             sSlot = self.Phi(i, j) % self.M
-            # sSlot = md5(server + "_" + str(j)) % self.M
+            # sSlot = md5(server + "_" + st r(j)) % self.M
             # sSlot = sha1(server + "_" + str(j)) % self.M
             # sSlot = sha256(server + "_" + str(j)) % self.M
             
