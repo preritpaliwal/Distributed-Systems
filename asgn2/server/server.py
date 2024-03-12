@@ -17,6 +17,8 @@ mydb = mysql.connector.connect(
 )
 cur = mydb.cursor()
 
+curr_idx_shards = {}
+
 # creating the database
 cur.execute("CREATE DATABASE studentdb")
 
@@ -50,6 +52,7 @@ def config():
     for sh in shards:
         cur.execute(f"CREATE TABLE studT_{sh} {query};")
         msg += f"{serverID}:{sh}, "
+        curr_idx_shards[sh] = 0
     msg+=" configured"
     
     return jsonify({
@@ -128,7 +131,7 @@ def write():
     data = payload["data"]
     data = [ "(" + ",".join(record["Stud_id"])+ ",".join(record["Stud_name"])+ ",".join(record["Stud_marks"]) + ")" for record in data ] 
 
-    query = f"INSERT INTO studT{shard} VALUES " + ",".join(data) + ";"
+    query = f"INSERT INTO studT_{shard} VALUES " + ",".join(data) + ";"
     cur.execute(query)
 
     return jsonify({
