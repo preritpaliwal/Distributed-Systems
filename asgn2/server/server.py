@@ -1,16 +1,26 @@
 from flask import Flask, json, jsonify, request
 import sys, os, socket
-import MySQLdb
+# import MySQLdb
+import mysql.connector
 
+# env variables
+serverID = os.environ['serverID']
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
-db = MySQLdb.connect(host="localhost", user="root", passwd="",db="studT") 
-cur = db.cursor()
 
+# mysql parser
+mydb = mysql.connector.connect(
+  host="localhost",
+  user="root",
+  password=""
+)
+cur = mydb.cursor()
+
+# creating the database
+cur.execute("CREATE DATABASE studentdb")
 
 def has_keys(json_data : dict, keys : list):
-    
     for key in keys:
         if key not in json_data.keys():
             return False
@@ -139,10 +149,43 @@ def delete():
                    "status" : "success"
     }), 200
 
+@app.route("/config",methods=["POST"])
+def config():
+    # initialize the shard tables 
+    payload = json.loads(request.data)
+    
+    if not has_keys(payload, ["shards", "schema"]) or not has_keys(payload["schema"], ["columns", "dtypes"]):
+        return jsonify({"status" : "failure"}), 400 # Bad Request
+    
+    schema = payload["schema"]
+    shards = payload["shards"]
+    
+    cols = schema["columns"]
+    dtypes = schema["dtypes"]
+    
+    query = "("
+    
+    for i in range(len(cols)-1):
+        query += f"{cols[i]} {dtypes[i]}, "
+    query += f"{cols[-1]} {dtypes[-1]})"
+    
+    msg = ""
+    for sh in shards:
+        cur.execute(f"CREATE TABLE studT_{sh} {query};")
+        msg += f"{serverID}:{sh}, "
+    msg+=" configured"
+    
+    return jsonify({
+                   "message" : msg,
+                   "status" : "success"
+    }), 200
+    
+    
 @app.route("/<path>", methods = ["GET"])
 def other(path):
     print(path)
     return jsonify({'message': f"<Error> '/{path}' endpoint does not exist in server replicas", 'status': 'successful'}), 200
+
 
 if __name__ == "__main__":
     

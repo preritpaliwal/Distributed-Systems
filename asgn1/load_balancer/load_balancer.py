@@ -11,13 +11,13 @@ log.disabled = True
 
 os.popen(f'docker run --name Server_1 --network mynet --network-alias Server_1 -e serverID=1 -d server:latest').read()
 os.popen(f'docker run --name Server_2 --network mynet --network-alias Server_2 -e serverID=2 -d server:latest').read()
+os.popen(f'docker run --name Server_3 --network mynet --network-alias Server_3 -e serverID=3 -d server:latest').read()
 
-mapper = consistentHash(num_servers = 2, num_slots = 512, num_virtual_servers = 9)
+mapper = consistentHash(num_servers = 3, num_slots = 512, num_virtual_servers = 9)
 load = {}
 
 @app.route("/rep", methods=["GET"])
 def rep():
-    
     replicas = mapper.getReplicas()
     return app.response_class(
         response = json.dumps({

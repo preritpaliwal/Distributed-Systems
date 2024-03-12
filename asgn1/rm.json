@@ -1,4 +1,4 @@
 {
-    "n" : 2,
-    "hostnames" : ["S5", "S4"]
+    "n" : 1,
+    "hostnames" : ["Server_1"]
 }
