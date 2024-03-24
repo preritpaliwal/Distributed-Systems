@@ -13,12 +13,43 @@ os.popen(f'docker run --name Server_1 --network mynet --network-alias Server_1 -
 os.popen(f'docker run --name Server_2 --network mynet --network-alias Server_2 -e serverID=2 -d server:latest').read()
 # os.popen(f'docker run --name Server_3 --network mynet --network-alias Server_3 -e serverID=3 -d server:latest').read()
 
-mapper = consistentHash(num_servers = 2, num_slots = 512, num_virtual_servers = 9)
+mapper = consistentHash(num_servers = 6, num_slots = 512, num_virtual_servers = 9)
 load = {}
 
-@app.route("/rep", methods=["GET"])
-def rep():
+# @app.route("/rep", methods=["GET"])
+# def rep():
     
+#     replicas = mapper.getReplicas()
+#     return app.response_class(
+#         response = json.dumps({
+#             "message" : {
+#                 "N" : len(replicas),
+#                 "replicas" : replicas
+#             }
+#         }),
+#         status = 200
+#     )
+
+@app.route("/init", methods=["POST"])
+def init():
+    
+    payload = json.loads(request.data)
+    if('n' not in payload.keys() or 'schema' not in payload.keys() or 'shards' not in payload.keys() or 'servers' not in payload.keys()):
+        return app.response_class(
+            response = json.dumps({  
+                "message" : "<Error> Payload not formatted correctly. Should contain n and hostnames field",
+                "status" : "failure"
+            }),
+            status = 400
+        )
+    n = int(payload['n'])
+    schema = payload['schema']
+    shards = payload['shards']
+    hostnames = payload['servers']
+
+    #TODO: initialize distributed database across different shards and replicas
+    
+
     replicas = mapper.getReplicas()
     return app.response_class(
         response = json.dumps({
@@ -29,6 +60,7 @@ def rep():
         }),
         status = 200
     )
+
 
 
 @app.route("/add", methods=["POST"])
