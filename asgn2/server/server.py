@@ -16,7 +16,6 @@ conn = mysql.connector.connect(
   user="root",
   password="Mysql@123",
   auth_plugin="mysql_native_password",
-  database="studentdb",
   autocommit=True
 )
 cur = conn.cursor()
@@ -82,7 +81,8 @@ def config():
 def heartbeat():
     return jsonify({}), 200
 
-# curl -X GET http://127.0.0.1:5000/copy -H "Content-Type: application/json" -d @copy.json@app.route("/copy", methods=["GET"])
+# curl -X GET http://127.0.0.1:5000/copy -H "Content-Type: application/json" -d @copy.json
+@app.route("/copy", methods=["GET"])
 def copy():
     """
     Return all the data belonging to the shards in the request, 
@@ -220,7 +220,18 @@ if __name__ == "__main__":
     #     exit(0)
     
     # serverID = sys.argv[1]
-    
+    cur.execute("show databases;")
+    # Get the results
+    databases = cur.fetchall()
+    db_exists = False
+    for db in databases:
+        db = db[0]
+        if db == "studentdb":
+            db_exists = True
+            break
+    if not db_exists:
+        cur.execute("create database studentdb;")
+    cur.execute("use studentdb;")
     cur.execute("show tables;")
     tables = cur.fetchall()
     for table in tables:
