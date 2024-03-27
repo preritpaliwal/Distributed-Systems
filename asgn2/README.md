@@ -14,8 +14,8 @@ Contributors:
 
 ## Database
 - A MySQL database with two data tables following the following schemas:
-1) ShardT (Stud id low: Number, Shard id: Number, Shard size:Number, valid idx:Number)
-2) MapT (Shard id: Number, Server id: Number)
+1) `ShardT (Stud id low: Number, Shard id: Number, Shard size:Number, valid idx:Number)`
+2) `MapT (Shard id: Number, Server id: Number)`
 - There are 4 shards in the database, each shard has 3 replicas across the servers, and there are 6 servers having shards in configuration.
 
 ## Server
