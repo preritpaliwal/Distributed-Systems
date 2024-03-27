@@ -1,0 +1,8 @@
+{
+    "shard": "sh2",
+    "curr_idx": 5,
+    "data": [{"Stud_id":2255,"Stud_name":"GHI","Stud_marks":27},
+        {"Stud_id":2256,"Stud_name":"GHQ","Stud_marks":30},
+        {"Stud_id":2257,"Stud_name":"GHW","Stud_marks":35},
+        {"Stud_id":2258,"Stud_name":"GHE","Stud_marks":40}]
+}

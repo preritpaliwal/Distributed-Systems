@@ -1,0 +1,8 @@
+{
+    "schema":{
+        "columns":["Stud_id","Stud_name","Stud_marks"],
+        "dtypes":["Number","String","String"]
+        },
+    "shards":["sh1","sh2"]
+}
+    

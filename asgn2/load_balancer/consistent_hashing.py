@@ -83,9 +83,6 @@ class consistentHash():
 
     def addServer(self, n, serverList):
         # done in load balancer
-        # TODO - check if desired names can be used for servers
-        # TODO - start n - len(serverList) additional servers
-        
         for server in serverList:
             
             self.pServers.append(server)

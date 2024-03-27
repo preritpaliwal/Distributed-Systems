@@ -4,7 +4,8 @@ import sys, os, socket
 import mysql.connector
 
 # env variables
-serverID = os.environ['serverID']
+# serverID = os.environ['serverID']
+serverID = 1
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
@@ -13,21 +14,29 @@ app.config['DEBUG'] = True
 mydb = mysql.connector.connect(
   host="localhost",
   user="root",
-  password=""
+  password="Mysql@123",
+  auth_plugin="mysql_native_password",
+  database="studentdb"
 )
 cur = mydb.cursor()
 
 curr_idx_shards = {}
 
+name_to_dataType = {
+    "Number":"int",
+    "String":"varchar(255)"
+}
+
 # creating the database
-cur.execute("CREATE DATABASE studentdb")
+# cur.execute("CREATE DATABASE studentdb")
+
 
 def has_keys(json_data : dict, keys : list):
     for key in keys:
         if key not in json_data.keys():
             return False
     return True
-
+# curl -X POST "http://127.0.0.1:5000/config" -H "Content-Type: application/json" -d @config.json
 @app.route("/config",methods=["POST"])
 def config():
     # initialize the shard tables 
@@ -45,12 +54,13 @@ def config():
     query = "("
     
     for i in range(len(cols)-1):
-        query += f"{cols[i]} {dtypes[i]}, "
-    query += f"{cols[-1]} {dtypes[-1]})"
+        query += f"{cols[i]} {name_to_dataType[dtypes[-1]]}, "
+    query += f"{cols[-1]} {name_to_dataType[dtypes[-1]]})"
     
     msg = ""
     for sh in shards:
-        cur.execute(f"CREATE TABLE studT_{sh} {query};")
+        final_query = f"CREATE TABLE studT_{sh} {query};"
+        cur.execute(final_query)
         msg += f"{serverID}:{sh}, "
         curr_idx_shards[sh] = 0
     msg+=" configured"
@@ -67,11 +77,12 @@ def config():
 #     # message = 'Hello from Server: ' + str(os.environ['serverID'])
 #     # return jsonify({'message': message, 'status': 'successful'}), 200
 
+# curl http://127.0.0.1:5000/heartbeat
 @app.route("/heartbeat", methods=["GET"])
 def heartbeat():
     return jsonify({}), 200
 
-@app.route("/copy", methods=["GET"])
+# curl -X GET http://127.0.0.1:5000/copy -H "Content-Type: application/json" -d @copy.json@app.route("/copy", methods=["GET"])
 def copy():
     """
     Return all the data belonging to the shards in the request, 
@@ -86,14 +97,14 @@ def copy():
     shards = payload["shards"]
     data = {}
     
-    # TODO - query the data from the database
     for shard in shards:
         cur.execute(f"SELECT * FROM studT_{shard}")
         data[shard] = cur.fetchall()
     
     data["status"] = "success"
     return jsonify(data), 200
-    
+
+# curl -X POST http://127.0.0.1:5000/read -H "Content-Type: application/json" -d @read.json
 @app.route("/read", methods=["POST"])
 def read():
     """
@@ -115,32 +126,41 @@ def read():
                    "data" : cur.fetchall(),
                    "status" : "success"
     }), 200
-    
+
+
+# curl -X POST http://127.0.0.1:5000/write -H "Content-Type: application/json" -d @write.json
 @app.route("/write", methods=["POST"])
 def write():
-    
     payload = json.loads(request.data)
 
     if not has_keys(payload, ["shard", 'curr_idx', "data"]):
         return jsonify({"status" : "failure"}), 400
 
-    # TODO - use eval to make data into a list of dict - No need ig
-    # TODO - figure out use of curr_idx
     shard = payload["shard"]
     curr_idx = payload["curr_idx"]
+    if(curr_idx_shards[shard] != curr_idx):
+        return jsonify({
+                    "message" : "Data entries not added, curr_idx mismatch",
+                    "current_idx" : curr_idx_shards[shard],
+                    "status" : "failure"
+        }), 400
+    
     data = payload["data"]
-    data = [ "(" + ",".join(record["Stud_id"])+ ",".join(record["Stud_name"])+ ",".join(record["Stud_marks"]) + ")" for record in data ] 
-
-    query = f"INSERT INTO studT_{shard} VALUES " + ",".join(data) + ";"
-    cur.execute(query)
+    for record in data:
+        query = f"INSERT INTO studT_{shard} VALUES ({record['Stud_id']}, '{record['Stud_name']}', {record['Stud_marks']});"
+        print(query,flush=True)
+        # TODO: For some unknown reason, the query is not getting executed
+        cur.execute(query)
+        curr_idx_shards[shard] += 1
 
     return jsonify({
                    "message" : "Data entries added",
-                   "current_idx" : "",
+                   "current_idx" : curr_idx_shards[shard],
                    "status" : "success"
     }), 200
 
 
+# curl -X PUT http://127.0.0.1:5000/update -H "Content-Type: application/json" -d @update.json
 @app.route("/update", methods=["PUT"])
 def update():
 
@@ -163,7 +183,7 @@ def update():
 
 
 
-
+# curl -X DELETE http://127.0.0.1:5000/del -H "Content-Type: application/json" -d @delete.json
 @app.route("/del", methods=["DELETE"])
 def delete():
 
@@ -184,11 +204,11 @@ def delete():
     }), 200
 
     
-    
+
 @app.route("/<path>", methods = ["GET"])
 def other(path):
     print(path)
-    return jsonify({'message': f"<Error> '/{path}' endpoint does not exist in server replicas", 'status': 'successful'}), 200
+    return jsonify({'message': f"<Error> '/{path}' endpoint does not exist in server", 'status': 'successful'}), 200
 
 
 if __name__ == "__main__":
@@ -200,6 +220,14 @@ if __name__ == "__main__":
     # serverID = sys.argv[1]
     
 
-        
+    cur.execute("show tables;")
+    tables = cur.fetchall()
+    for table in tables:
+        table = table[0].decode()
+        shard = table.split("_")[1]
+        cur.execute(f"SELECT * FROM {table}")
+        curr_idx_shards[shard] = len(cur.fetchall())
+    print(curr_idx_shards,flush=True)
+    
     app.run( host = "0.0.0.0", port = 5000, debug = True)
     
