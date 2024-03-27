@@ -1,5 +1,6 @@
 from flask import Flask, request, json, jsonify
 from consistent_hashing import consistentHash
+from threading import Lock, Semaphore
 import random, logging, requests, os, time
 
 app = Flask(__name__)
@@ -21,6 +22,25 @@ def has_keys(json_data : dict, keys : list):
     
     return True
      
+def send(server, endpoint, payload, method = "POST"):
+    
+    r = None
+    url = f"http://{server}:5000/{endpoint}"
+    
+    if method == "POST":
+        r = requests.post(url, data = payload)
+        
+    elif method == "DELETE":
+        r = requests.delete(url, data = payload)
+        
+    elif method == "PUT":
+        r = requests.put(url, data = payload)
+        
+    elif method == "GET":
+        r = requests.get(url) 
+        
+    return r.json(), r.status_code
+    
 
 @app.route("/init", methods=["POST"])
 def init():
@@ -87,6 +107,7 @@ def init():
         for shard_id in shards:
             
             shard_mappers[shard_id]["servers"].append(server)
+            
             
 
     return jsonify({
