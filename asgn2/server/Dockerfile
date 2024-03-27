@@ -15,6 +15,8 @@ RUN pip install -r requirements.txt
 RUN apt-get install -y default-mysql-server
 
 # ENV serverID="101"
+EXPOSE 5000
+
 
 ENTRYPOINT  [ "bash" ]
 CMD [ "server_init.sh"]

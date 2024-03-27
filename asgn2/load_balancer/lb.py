@@ -1,11 +1,11 @@
 from flask import Flask, request, json, jsonify
 from consistent_hashing import consistentHash
-import random, logging, requests, os
+import random, logging, requests, os, time
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
-log = logging.getLogger('werkzeug')
-log.disabled = True
+# log = logging.getLogger('werkzeug')
+# log.disabled = True
 
 num_replicas = 3
 
@@ -26,7 +26,7 @@ def has_keys(json_data : dict, keys : list):
 def init():
     payload = json.loads(request.data)
     
-    if not has_keys(payload, ["N","schema", "shards", "servers"]) or not has_keys(payload["schema"], ["columns", "dtypes"]) or not has_keys(payload["shards"], ["Stud_id_low", "Shard_id","Shard_size"]):
+    if not has_keys(payload, ["N","schema", "shards", "servers"]) or not has_keys(payload["schema"], ["columns", "dtypes"]) :
         return jsonify({
             "message" : "<Error> Payload not formatted correctly.",
             "status" : "failure"
@@ -48,32 +48,34 @@ def init():
     # TODO: Start N servers with mentioned shards and schema
     
     cnt=0
-    for s,v in servers:
-        if s.contains('['):
-            name = "server"+random.randint(0,1000)
+    for s,v in servers.items():
+        if '[' in s:
+            name = "Server"+str(random.randint(0,1000))
         else:
             name = s
         while name in bookkeeping["servers"].keys():
-            name = "server"+random.randint(0,1000)
-            
+            name = "Server"+str(random.randint(0,1000))
         bookkeeping["servers"][name] = v
         bookkeeping["N"]+=1
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
+        # print(name,flush=True)
+        time.sleep(2)
         data_payload = {}
         data_payload["schema"] = schema
         data_payload["shards"] = v
-        r = requests.post(f"http://{name}:5000/config", data=data_payload)
+        response = requests.post(f"http://{name}:5000/config", data=data_payload)
         cnt+=1
     
     while cnt<N:
-        name = "server"+random.randint(0,1000)
+        name = "Server"+str(random.randint(0,1000))
         while name in bookkeeping["servers"].keys():
-            name = "server"+random.randint(0,1000)
+            name = "Server"+str(random.randint(0,1000))
         cur_shards = ["sh" + str(random.randint(1,len(shards))),"sh"+str(random.randint(1,len(shards)))]
         bookkeeping["servers"][name] = cur_shards
         bookkeeping["N"]+=1
         # TODO - add new server and hit its config endpoint
-        os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
+        os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d -p 5000 server:latest').read()
+        time.sleep(4)
         data_payload = {}
         data_payload["schema"] = schema
         data_payload["shards"] = cur_shards
@@ -100,7 +102,7 @@ def status():
 def add():
     payload = json.loads(request.data)
     
-    if not has_keys(payload, ["n", "new_shards", "servers"]) or not has_keys(payload["shards"], ["Stud_id_low", "Shard_id","Shard_size"]):
+    if not has_keys(payload, ["n", "new_shards", "servers"]):
         return jsonify({
             "message" : "<Error> Payload not formatted correctly.",
             "status" : "failure"
@@ -116,30 +118,36 @@ def add():
             "status" : "failure"
         }), 400
     
-    new_servers = []
     cnt=0
-    for s,v in servers:
-        if s.contains('['):
-            name = "server"+random.randint(0,1000)
+    msg = "Added "
+    for s,v in servers.items():
+        if '[' in s:
+            name = "Server"+str(random.randint(0,1000))
         else:
             name = s
         while name in bookkeeping["servers"].keys():
-            name = "server"+random.randint(0,1000)
-        new_servers.append(name)
+            name = "Server"+str(random.randint(0,1000))
         bookkeeping["servers"][name] = v
         bookkeeping["N"]+=1
         # TODO - add new server and hit its config endpoint
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
+        time.sleep(4)
         data_payload = {}
         data_payload["schema"] = bookkeeping["schema"]
         data_payload["shards"] = v
         r = requests.post(f"http://{name}:5000/config", data=data_payload)
-        
+        msg+=name
         cnt+=1
         if cnt == n:
             break
-        
+        else:
+            msg+=" and "
     bookkeeping["shards"] += new_shards
+    
+    return jsonify({"N":bookkeeping["N"],
+                    "message": msg,
+                    "status": "successful"
+                    }),200
 
 @app.route("/rm", methods=["DELETE"])
 def rm():
@@ -225,3 +233,7 @@ def delete():
 
     # TODO - delete a record in all servers containing the shard
 
+if __name__ == "__main__":
+        
+    app.run( host = "0.0.0.0", port = 5000, debug = True)
+    
