@@ -15,7 +15,7 @@ class consistentHash():
         self.serverRing = [ None for i in range(self.M) ]
         self.requestRing = [ None for i in range(self.M) ]
         
-        self.addServer(self.N, [ f"Server_{i}" for i in range(1, self.N+1) ])
+        # self.addServer(self.N, [ f"Server_{i}" for i in range(1, self.N+1) ])
     
     def __power(self, a, exp, mod):
         res = 1
@@ -27,14 +27,10 @@ class consistentHash():
         return (a * res) % mod
     
     def __h(self, i):
-        # return __power(37, i, self.M)
         return int(sha256(f"Request_{i}".encode()).hexdigest(),16)
-        # return i*i + 2*i + 17
-    
-    def __phi(self, i, j):
-        # return __power(37, __power(i, j, 97), self.M)
-        return int(sha256(f"Server_{i}_{j}".encode()).hexdigest(),16)
-        return i ** 2 + (j+1) ** 2 + 24
+
+    def __phi(self, server : str, j):
+        return int(sha256(f"{server}_{j}".encode()).hexdigest(), 16)
     
     def getReplicas(self):
         
@@ -65,8 +61,9 @@ class consistentHash():
         
         for i in range(self.M):
             if self.serverRing[(rSlot+i) % self.M] is not None:
-                _, number, _ = self.serverRing[(rSlot + i) % self.M].split("_")
-                server = f"Server_{number}"
+                # _, number, _ = self.serverRing[(rSlot + i) % self.M].split("_")
+                # server = f"Server_{number}"
+                server, j = self.serverRing[(rSlot + i) % self.M].split("_")
                 break
             
         
@@ -76,17 +73,21 @@ class consistentHash():
         
         self.requestRing[rSlot] = None
     
-    def __getServerNumber(self, server : str):
-        for i in range(len(server)):
-            if server[i:].isnumeric():
-                return int(server[i:])
+    # def __getServerNumber(self, server : str):
+    #     for i in range(len(server)):
+    #         if server[i:].isnumeric():
+    #             return int(server[i:])
 
-    def addServer(self, n, serverList):
-        # done in load balancer
+    def addServer(self, serverList : list[str] | str):
+        
+        if isinstance(serverList, str):
+            serverList = [ serverList ]
+            
         for server in serverList:
             
             self.pServers.append(server)
-            i = self.__getServerNumber(server)
+            self.N += 1
+            # i = self.__getServerNumber(server)
             
             for j in range(1, self.K+1):
                 
@@ -94,21 +95,19 @@ class consistentHash():
                 # sSlot = sha1(server + "_" + str(j)) % self.M
                 # sSlot = sha256(server + "_" + str(j)) % self.M
         
-                sSlot = self.Phi(i, j) % self.M
-                self.__addEntity(self.serverRing, sSlot, f"{server}_{j}")
+                sSlot = self.Phi(server, j) % self.M
+                self.__addEntity(self.serverRing, sSlot, f"{server}")
+                # self.__addEntity(self.serverRing, sSlot, f"{server}_{j}")
         
         return self.pServers
     
     def __removeServer(self, server):
         
-        i = self.__getServerNumber(server)
+        # i = self.__getServerNumber(server)
                 
         for j in range(1, self.K+1):
             
-            sSlot = self.Phi(i, j) % self.M
-            # sSlot = md5(server + "_" + st r(j)) % self.M
-            # sSlot = sha1(server + "_" + str(j)) % self.M
-            # sSlot = sha256(server + "_" + str(j)) % self.M
+            sSlot = self.Phi(server, j) % self.M
             
             vServerName = f"{server}_{j}"
     

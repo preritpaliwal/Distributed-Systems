@@ -7,8 +7,11 @@ app.config['DEBUG'] = True
 log = logging.getLogger('werkzeug')
 log.disabled = True
 
-mapper = consistentHash(num_servers = 2, num_slots = 512, num_virtual_servers = 9)
+num_replicas = 3
+
+# mapper = consistentHash(num_servers = 2, num_slots = 512, num_virtual_servers = 9)
 bookkeeping = {"N": 0, "schema": {}, "shards": [], "servers": {}}
+shard_mappers = {}
 
 def has_keys(json_data : dict, keys : list):
     
@@ -33,6 +36,12 @@ def init():
     shards = payload["shards"]
     servers = payload["servers"]
     
+    for shard in shards:
+        shard_mappers[shard["Shard_id"]] = {
+            "mapper" : consistentHash(0, 512, 9),
+            "servers" : []
+        }
+    
     bookkeeping["schema"]=schema
     bookkeeping["shards"]=shards
     
@@ -46,6 +55,7 @@ def init():
             name = s
         while name in bookkeeping["servers"].keys():
             name = "server"+random.randint(0,1000)
+            
         bookkeeping["servers"][name] = v
         bookkeeping["N"]+=1
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
@@ -69,6 +79,13 @@ def init():
         data_payload["shards"] = cur_shards
         r = requests.post(f"http://{name}:5000/config", data=data_payload)
         cnt+=1
+        
+    for server, shards in bookkeeping["servers"].items():
+        
+        for shard_id in shards:
+            
+            shard_mappers[shard_id]["servers"].append(server)
+            
 
     return jsonify({
         "message" : "Configured Database",
@@ -89,7 +106,7 @@ def add():
             "status" : "failure"
         }), 200
     
-    n = payload["n"]
+    n = int(payload["n"])
     new_shards = payload["new_shards"]
     servers = payload["servers"]
     
@@ -126,12 +143,65 @@ def add():
 
 @app.route("/rm", methods=["DELETE"])
 def rm():
-    pass
+
+    payload = json.loads(request.data)
+    
+    if not has_keys(payload, ["n", "servers"]):
+        return jsonify({
+            "message" : "<Error> Payload not formatted correctly.",
+            "status" : "failure"
+        }), 200
+        
+    n = int(payload["n"])
+    servers = payload["servers"]
+    
+    
+    if n < len(servers):
+        return jsonify({
+            "message" : "<Error> wrong input n < len(servers).",
+            "status" : "failure"
+        }), 200
+        
+    
     # TODO - remove a server from the database
 
 @app.route("/read", methods=["POST"])
 def read():
-    pass
+
+    payload = json.loads(request.data)
+    
+    if not has_keys(payload, ["Stud_id"]) or not has_keys(payload["Stud_id"], ["low", "high"]):
+        return jsonify({
+            "message" : "<Error> Payload not formatted correctly.",
+            "status" : "failure"
+        }), 200
+        
+    low = int(payload["Stud_id"]["low"])
+    high = int(payload["Stud_id"]["high"])
+    
+    for idx in range(low, high+1):
+        for shard in bookkeeping["shards"]:
+            if shard["Stud_id_low"] <= idx and shard["Stud_id_low"] + shard["Shard_size"] >= idx:
+                # Make request to shard idx
+                shard_id = shard["Shard_id"]
+                requestID = random.randint(100000, 999999)
+                server, rSlot = shard_mappers[shard_id].addRequest(requestID)
+                print(idx, shard_id, server, rSlot, flush = True)
+                
+                
+                if rSlot is None:
+                    print("Hashtable full", requestID)
+                    return jsonify({
+                        "message" : "Hashtable full"
+                    }), 400
+                    
+                data_payload = 
+                try:
+                     r = requests.post(f"http://{server}:5000/config", data=data_payload)
+                    
+                except:
+                    
+    
     # TODO - pick what servers to ping for each data shard
     # TODO - return data from all servers to client
 
