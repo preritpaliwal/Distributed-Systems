@@ -11,15 +11,15 @@ app = Flask(__name__)
 app.config['DEBUG'] = True
 
 # mysql parser
-mydb = mysql.connector.connect(
+conn = mysql.connector.connect(
   host="localhost",
   user="root",
   password="Mysql@123",
   auth_plugin="mysql_native_password",
-  database="studentdb"
+  database="studentdb",
+  autocommit=True
 )
-cur = mydb.cursor()
-
+cur = conn.cursor()
 curr_idx_shards = {}
 
 name_to_dataType = {
@@ -120,7 +120,8 @@ def read():
     lo = payload["Stud_id"]["low"]
     hi = payload["Stud_id"]["high"]
 
-    cur.execute(f"SELECT * FROM studT_{shard} Stud_id >= {lo} AND Stud_id <= {hi}")
+    query = f"SELECT * FROM studT_{shard} WHERE Stud_id >= {lo} AND Stud_id <= {hi};"
+    cur.execute(query)
 
     return jsonify({
                    "data" : cur.fetchall(),
@@ -172,8 +173,9 @@ def update():
     shard = payload["shard"]
     stud_id = payload["Stud_id"]
     data = payload["data"]
-
-    query = f"UPDATE studT_{shard} SET " + ",".join([f"{k} = {v}" for k,v in data.items()]) + f" WHERE Stud_id = {stud_id};"
+    stud_name=data["Stud_name"]
+    stud_marks=data["Stud_marks"]
+    query = f"UPDATE studT_{shard} SET Stud_name=\"{stud_name}\",Stud_marks={stud_marks} WHERE Stud_id = {stud_id};"
     cur.execute(query)
     
     return jsonify({
@@ -219,7 +221,6 @@ if __name__ == "__main__":
     
     # serverID = sys.argv[1]
     
-
     cur.execute("show tables;")
     tables = cur.fetchall()
     for table in tables:
