@@ -30,7 +30,7 @@ Contributors:
 
 ## Load Balancer
 - The Load Balancer is the only container that we run ourselves and it manages the `N` server containers being run. Certain modifications have been made to integrate the new features needed in this assignment compared to the previous one.
-- The Load Balancer acts as the parent in spawning the server containers initially as well as respawning new server containers on the failure of existing ones.
+- The Load Balancer manages the Stud_id -> Shard_id -> Server_id mapping. We have maintained consistent hashmaps for each of the shards - hashmaps can be identified with the Shard_id. 
 - It still utilizes Consistent Hashing for mapping requests to `virtual servers`.
 - The Load Balancer abstracts away the internal ports and endpoints of servers and handles all the requests at it's port 5000 and supports the following endpoints:
 - `/init` : This endpoint supports `POST` requests and initializes distributed database across all the different shards and replicas.
@@ -41,7 +41,6 @@ Contributors:
 - `/write` : This endpoint supports `POST` requests and writes data entries to it's corresponding shard replicas across the distributed database.
 - `/update` : This endpoint supports `PUT` requests and updates a specified data entry across the distributed database.
 - `/del` : This endpoint supports `DELETE` requests and deletes a specified data entry across the distributed database.
-- `/<path>` : This generic endpoint supporrts `GET` requests and returns the response from server if path is home else returns an error message.
 
 # Design choices 
 
