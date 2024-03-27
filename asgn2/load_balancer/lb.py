@@ -59,13 +59,13 @@ def init():
     for shard in shards:
         shard_mappers[shard["Shard_id"]] = {
             "mapper" : consistentHash(0, 512, 9),
-            "servers" : []
+            "servers" : [],
+            "curr_idx" : 0
         }
     
     bookkeeping["schema"]=schema
     bookkeeping["shards"]=shards
     
-    # TODO: Start N servers with mentioned shards and schema
     
     cnt=0
     for s,v in servers.items():
@@ -78,7 +78,6 @@ def init():
         bookkeeping["servers"][name] = v
         bookkeeping["N"]+=1
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
-        # print(name,flush=True)
         time.sleep(2)
         data_payload = {}
         data_payload["schema"] = schema
@@ -93,7 +92,6 @@ def init():
         cur_shards = ["sh" + str(random.randint(1,len(shards))),"sh"+str(random.randint(1,len(shards)))]
         bookkeeping["servers"][name] = cur_shards
         bookkeeping["N"]+=1
-        # TODO - add new server and hit its config endpoint
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d -p 5000 server:latest').read()
         time.sleep(4)
         data_payload = {}
@@ -103,12 +101,9 @@ def init():
         cnt+=1
         
     for server, shards in bookkeeping["servers"].items():
-        
         for shard_id in shards:
-            
             shard_mappers[shard_id]["servers"].append(server)
-            
-            
+            shard_mappers[shard_id]["mapper"].addServer(server)
 
     return jsonify({
         "message" : "Configured Database",
@@ -208,46 +203,83 @@ def read():
     low = int(payload["Stud_id"]["low"])
     high = int(payload["Stud_id"]["high"])
     
-    for idx in range(low, high+1):
-        for shard in bookkeeping["shards"]:
-            if shard["Stud_id_low"] <= idx and shard["Stud_id_low"] + shard["Shard_size"] >= idx:
-                # Make request to shard idx
-                shard_id = shard["Shard_id"]
-                requestID = random.randint(100000, 999999)
-                server, rSlot = shard_mappers[shard_id].addRequest(requestID)
-                print(idx, shard_id, server, rSlot, flush = True)
-                
-                
-                if rSlot is None:
-                    print("Hashtable full", requestID)
-                    return jsonify({
-                        "message" : "Hashtable full"
-                    }), 400
-                    
-                data_payload = 
-                try:
-                     r = requests.post(f"http://{server}:5000/config", data=data_payload)
-                    
-                except:
-                    
     
-    # TODO - pick what servers to ping for each data shard
-    # TODO - return data from all servers to client
-
+    shards_used = []
+    data = []
+    for shard in bookkeeping["shards"]:
+        
+        lo = shard["Stud_id_low"]
+        hi = shard["Stud_id_low"] + shard["Shard_size"]
+        
+        
+        if not (lo>high or hi< low):
+            shards_used.append(shard)
+            ql = max(lo, low)
+            qhi = min(hi, high)
+            shard_id = shard["Shard_id"]
+            requestID = random.randint(100000, 999999)
+            server, rSlot = shard_mappers[shard_id]["mapper"].addRequest(requestID)
+            print(ql, qhi, shard_id, server, rSlot, flush = True)
+            data_payload = {"shard":shard_id, "Stud_id":{"low":ql, "high":qhi}}
+                try:
+                    r = requests.post(f"http://{server}:5000/read", data=data_payload)
+                    data.extend(r.json()["data"])
+                except:
+                    print("Server not reachable", flush = True)
+    
+    return jsonify({
+            "shards_queried": shards_used,
+            "data": data,
+            "status": "success"
+        }),200
+    
 
 @app.route("/write", methods=["POST"])
 def write():
-    pass
-
     # TODO - update all servers containing the shard
     # TODO - figure out use of curr_idx
+    payload = json.loads(request.data)
+    data = payload["data"]
+    for record in data:
+        for shard in bookkeeping["shards"]:
+            if record["Stud_id"] >= shard["Stud_id_low"] and record["Stud_id"] < shard["Stud_id_low"] + shard["Shard_size"]:
+                requestID = random.randint(100000, 999999)
+                shard_id = shard["Shard_id"]
+                server, rSlot = shard_mappers[shard_id]["mapper"].addRequest(requestID)
+                data_payload = {"shard":shard_id,"curr_idx": shard_mappers[shard_id]["curr_idx"], "data":[record]}
+                try:
+                    # write lock
+                    # send write request to all servers when done release the lock
+                    # on write lock block all read requests
+                    r = requests.post(f"http://{server}:5000/write", data=data_payload)
+                    shard_mappers[shard_id]["curr_idx"] = r.json()["curr_idx"]
+                except:
+                    print("Server not reachable", flush = True)
+    return jsonify({
+        "message" : f"{len(data)} Data entries added",
+        "status" : "success"
+        }), 200
 
 @app.route("/update", methods=["PUT"])
 def update():
-    pass
-
-    # TODO - update a single data row in all servers containting the shard
-
+    payload = json.loads(request.data) 
+    stud_id = payload["Stud_id"]
+    data = payload["data"]
+    for shard in bookkeeping["shards"]:
+        if stud_id >= shard["Stud_id_low"] and stud_id < shard["Stud_id_low"] + shard["Shard_size"]:
+            requestID = random.randint(100000, 999999)
+            shard_id = shard["Shard_id"]
+            server, rSlot = shard_mappers[shard_id]["mapper"].addRequest(requestID)
+            data_payload = {"shard":shard_id,"Stud_id":stud_id, "data":data}
+            try:
+                r = requests.put(f"http://{server}:5000/update", data=data_payload)
+            except:
+                print("Server not reachable", flush = True)
+    return jsonify({
+            "message" : f"Data updated for Stud_id : {stud_id} updated",
+            "status" : "success"
+        }),200
+    
 @app.route("/del", methods=["DELETE"])
 def delete():
     pass
