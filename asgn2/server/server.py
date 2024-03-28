@@ -115,7 +115,7 @@ def copy():
     
     for shard in shards:
         cur.execute(f"SELECT * FROM studT_{shard}")
-        data[shard] = cur.fetchall()
+        data[shard] = [ {"Stud_id" : record[0], "Stud_name" : record[1], "Stud_marks" : record[2]}  for record in  cur.fetchall() ]
     
     data["status"] = "success"
     return jsonify(data), 200

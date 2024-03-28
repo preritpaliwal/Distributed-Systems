@@ -311,7 +311,7 @@ def write():
         for server in shard_mappers[shard_id]["servers"]:
             try:
                 r = requests.post(f"http://{server}:5000/write", json=data_payload)
-                print(r,server)
+                # print(r,server)
             except:
                 print(f"Server {server} not reachable", flush = True)
         shard_mappers[shard_id]["curr_idx"] += len(records)
@@ -387,6 +387,7 @@ def delete():
 
 def respawn_server():
     while True:
+        
         for server, shards in bookkeeping["servers"].items():
             try:
                 r = requests.get(f"http://{server}:5000/heartbeat")
@@ -408,7 +409,8 @@ def respawn_server():
                 except:
                     print(f"Could not configure {server}", flush = True)
                 time.sleep(2)
-                print(r.json(),r.status_code,flush=True)
+                # print(r.json(),r.status_code,flush=True
+                
                 for shard_id in shards:
                     for another_server in shard_mappers[shard_id]["servers"]:
                         if another_server != server:
@@ -416,13 +418,16 @@ def respawn_server():
                                 r = requests.get(f"http://{another_server}:5000/copy",json={"shards":[shard_id]})
                             except:
                                 print(f"{another_server} not reachable", flush = True)
-                            print(r.json(),r.status_code,flush=True)
+                            # print(r.json(),r.status_code,flush=True)
                             
-                            try:
-                                r = requests.post(f"http://{server}:5000/write",json={"shard":shard_id, "curr_idx":0, "data":r.json()["data"]})
-                            except:
-                                print(f"{server} not reachable", flush = True)
-                            print(r.json(),r.status_code,flush=True)
+                            # try:
+                            data  = r.json()[shard_id]
+                            
+                            r = requests.post(f"http://{server}:5000/write",json={"shard":shard_id, "curr_idx":0, "data":data})
+                            # except Exception as e:
+                                # print(str(e), f"{server} not reachable", flush = True)
+                            
+                            # print(r.json(),r.status_code,flush=True)
                             print(f"Shard {shard_id} copied from {another_server} to {server}",flush=True)
                             break
         time.sleep(10)

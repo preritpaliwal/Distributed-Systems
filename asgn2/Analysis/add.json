@@ -1,0 +1,5 @@
+{
+    "n" : 2,
+    "new_shards" : [],
+    "servers" : { "Server3":["sh1","sh3"] }
+}
