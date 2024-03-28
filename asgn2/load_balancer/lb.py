@@ -263,7 +263,7 @@ def read():
             qhi = min(hi, high)
             shard_id = shard["Shard_id"]
             requestID = random.randint(100000, 999999)
-            server, _ = shard_mappers[shard_id]["mapper"].addRequest(requestID)
+            server, rSlot = shard_mappers[shard_id]["mapper"].addRequest(requestID)
             data_payload = {"shard":shard_id, "Stud_id":{"low":ql, "high":qhi}}
             if not shard_mappers[shard_id]["write_lock"].locked():
                 shard_mappers[shard_id]["read_lock"].acquire()
@@ -276,6 +276,7 @@ def read():
                     print("Server not reachable", flush = True)
                     
                 shard_mappers[shard_id]["read_lock"].release()
+            shard_mappers[shard_id]["mapper"].clearRequest(rSlot)
     return jsonify({
             "shards_queried": shards_used,
             "data": data,
@@ -313,6 +314,7 @@ def write():
                 print(r,server)
             except:
                 print(f"Server {server} not reachable", flush = True)
+        shard_mappers[shard_id]["curr_idx"] += len(records)
         shard_mappers[shard_id]["read_lock"].release()
         shard_mappers[shard_id]["write_lock"].release()
 
@@ -405,6 +407,7 @@ def respawn_server():
                     r = requests.post(f"http://{server}:5000/config", json={"schema":bookkeeping["schema"], "shards":shards})
                 except:
                     print(f"Could not configure {server}", flush = True)
+                time.sleep(2)
                 print(r.json(),r.status_code,flush=True)
                 for shard_id in shards:
                     for another_server in shard_mappers[shard_id]["servers"]:
