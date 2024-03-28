@@ -96,7 +96,7 @@ class consistentHash():
                 # sSlot = sha256(server + "_" + str(j)) % self.M
         
                 sSlot = self.Phi(server, j) % self.M
-                self.__addEntity(self.serverRing, sSlot, f"{server}")
+                self.__addEntity(self.serverRing, sSlot, f"{server}_{j}")
                 # self.__addEntity(self.serverRing, sSlot, f"{server}_{j}")
         
         return self.pServers

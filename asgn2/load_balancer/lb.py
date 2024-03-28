@@ -22,26 +22,6 @@ def has_keys(json_data : dict, keys : list):
     
     return True
      
-def send(server, endpoint, payload, method = "POST"):
-    
-    r = None
-    url = f"http://{server}:5000/{endpoint}"
-    
-    if method == "POST":
-        r = requests.post(url, data = payload)
-        
-    elif method == "DELETE":
-        r = requests.delete(url, data = payload)
-        
-    elif method == "PUT":
-        r = requests.put(url, data = payload)
-        
-    elif method == "GET":
-        r = requests.get(url) 
-        
-    return r.json(), r.status_code
-    
-
 @app.route("/init", methods=["POST"])
 def init():
     payload = json.loads(request.data)
@@ -84,7 +64,12 @@ def init():
         data_payload = {}
         data_payload["schema"] = schema
         data_payload["shards"] = v
-        response = requests.post(f"http://{name}:5000/config", data=data_payload)
+        url=f"http://{name}:5000/config"
+        try:
+            r = requests.post(url, json=data_payload)
+            print(r,flush=True)
+        except:
+            print("Server not reachable", flush = True)
         cnt+=1
     
     while cnt<N:
@@ -95,11 +80,16 @@ def init():
         bookkeeping["servers"][name] = cur_shards
         bookkeeping["N"]+=1
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d -p 5000 server:latest').read()
-        time.sleep(4)
+        time.sleep(2)
         data_payload = {}
         data_payload["schema"] = schema
         data_payload["shards"] = cur_shards
-        r = requests.post(f"http://{name}:5000/config", data=data_payload)
+        url=f"http://{name}:5000/config"
+        try:
+            r = requests.post(url, json=data_payload)
+            print(r,flush=True)
+        except:
+            print("Server not reachable", flush = True)
         cnt+=1
         
     for server, shards in bookkeeping["servers"].items():
@@ -134,7 +124,7 @@ def add():
         return jsonify({
             "message" : "<Error> Number of new servers (n) is greater than newly added instances",
             "status" : "failure"
-        }), 400
+        }), 200
     
     cnt=0
     msg = "Added "
@@ -149,11 +139,15 @@ def add():
         bookkeeping["N"]+=1
         # TODO - add new server and hit its config endpoint
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
-        time.sleep(4)
+        time.sleep(2)
         data_payload = {}
         data_payload["schema"] = bookkeeping["schema"]
         data_payload["shards"] = v
-        r = requests.post(f"http://{name}:5000/config", data=data_payload)
+        try:
+            r = requests.post(f"http://{name}:5000/config", json=data_payload)
+            print(r,flush=True)
+        except:
+            print("Server not reachable", flush = True)
         msg+=name
         cnt+=1
         if cnt == n:
@@ -205,7 +199,6 @@ def read():
     low = int(payload["Stud_id"]["low"])
     high = int(payload["Stud_id"]["high"])
     
-    
     shards_used = []
     data = []
     for shard in bookkeeping["shards"]:
@@ -215,28 +208,24 @@ def read():
         
         
         if not (lo>high or hi< low):
-            shards_used.append(shard)
+            shards_used.append(shard["Shard_id"])
             ql = max(lo, low)
             qhi = min(hi, high)
             shard_id = shard["Shard_id"]
             requestID = random.randint(100000, 999999)
-            server, rSlot = shard_mappers[shard_id]["mapper"].addRequest(requestID)
-            print(ql, qhi, shard_id, server, rSlot, flush = True)
+            server, _ = shard_mappers[shard_id]["mapper"].addRequest(requestID)
             data_payload = {"shard":shard_id, "Stud_id":{"low":ql, "high":qhi}}
-            
             if not shard_mappers[shard_id]["write_lock"].locked():
-                
                 shard_mappers[shard_id]["read_lock"].acquire()
-                
                 try:
-                    response, status = send(server, "read", data_payload, "POST") 
-                    data.extend(response["data"])
+                    url=f"http://{server}:5000/read"
+                    r = requests.post(url, json=data_payload)
+                    print(r,flush=True)
+                    data.extend(r.json()["data"])
                 except:
                     print("Server not reachable", flush = True)
                     
                 shard_mappers[shard_id]["read_lock"].release()
-                
-    
     return jsonify({
             "shards_queried": shards_used,
             "data": data,
@@ -245,11 +234,8 @@ def read():
     
 @app.route("/write", methods=["POST"])
 def write():
-    # TODO - update all servers containing the shard
-    # TODO - figure out use of curr_idx
     payload = json.loads(request.data)
     data = payload["data"]
-    
     shard_data = {}
     
     for record in data:
@@ -262,21 +248,21 @@ def write():
                 else:
                     shard_data[shard_id] = [ record ]
                     
-    
     for shard_id, records in shard_data.items():
         
         shard_mappers[shard_id]["read_lock"].acquire()
         shard_mappers[shard_id]["write_lock"].acquire()
-        
         data_payload = {
             "shard" : shard_id,
             "curr_idx" : shard_mappers[shard_id]["curr_idx"],
             "data" : records
         }
-        
         for server in shard_mappers[shard_id]["servers"]:
-            send(server, "write", data_payload, "POST")
-                
+            try:
+                r = requests.post(f"http://{server}:5000/write", json=data_payload)
+                print(r,server)
+            except:
+                print(f"Server {server} not reachable", flush = True)
         shard_mappers[shard_id]["read_lock"].release()
         shard_mappers[shard_id]["write_lock"].release()
 
@@ -303,7 +289,8 @@ def update():
             
             for server in shard_mappers[shard_id]["servers"]:
                 try:
-                    send(server, "update", data_payload, "PUT")
+                    r = requests.put(f"http://{server}:5000/update", json=data_payload)
+                    print(r,flush=True)
                 except:
                     print(f"update at {server} for shard {shard_id} failed")    
                 
@@ -333,7 +320,8 @@ def delete():
             
             for server in shard_mappers[shard_id]["servers"]:
                 try:
-                    send(server, "update", data_payload, "DELETE")
+                    r = requests.delete(f"http://{server}:5000/del", json=data_payload)
+                    print(r,flush=True)
                 except:
                     print(f"deletion at {server} for shard {shard_id}, Student {stud_id} failed.")
                     

@@ -39,8 +39,12 @@ def has_keys(json_data : dict, keys : list):
 @app.route("/config",methods=["POST"])
 def config():
     # initialize the shard tables 
-    payload = json.loads(request.data)
-    
+    try:
+        payload = json.loads(request.data)
+    except:
+        return jsonify({"status" : "failure"}), 401
+    print("received\n\\n\n\n",flush=True)
+    print(payload,flush= True)
     if not has_keys(payload, ["shards", "schema"]) or not has_keys(payload["schema"], ["columns", "dtypes"]):
         return jsonify({"status" : "failure"}), 400 # Bad Request
     
@@ -53,17 +57,21 @@ def config():
     query = "("
     
     for i in range(len(cols)-1):
-        query += f"{cols[i]} {name_to_dataType[dtypes[-1]]}, "
+        query += f"{cols[i]} {name_to_dataType[dtypes[i]]}, "
     query += f"{cols[-1]} {name_to_dataType[dtypes[-1]]})"
     
     msg = ""
     for sh in shards:
         final_query = f"CREATE TABLE studT_{sh} {query};"
-        cur.execute(final_query)
+        print(final_query,flush=True)
+        try:
+            cur.execute(final_query)
+        except:
+            return jsonify({"status" : "failure"}), 402 # Bad Request
         msg += f"{serverID}:{sh}, "
         curr_idx_shards[sh] = 0
     msg+=" configured"
-    
+    print("tables created",flush=True)
     return jsonify({
                    "message" : msg,
                    "status" : "success"
@@ -75,6 +83,14 @@ def config():
 #     # print("home function called", os.environ['serverID'],flush=True)
 #     # message = 'Hello from Server: ' + str(os.environ['serverID'])
 #     # return jsonify({'message': message, 'status': 'successful'}), 200
+
+@app.route("/tables",methods=["GET"])
+def tables():
+    cur.execute("Show tables;")
+    tabs = cur.fetchall()
+    print(tabs,flush=True)
+    return jsonify({"data":tabs}),200
+
 
 # curl http://127.0.0.1:5000/heartbeat
 @app.route("/heartbeat", methods=["GET"])

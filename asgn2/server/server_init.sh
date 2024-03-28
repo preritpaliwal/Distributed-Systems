@@ -15,5 +15,5 @@ until mysql -u root -e "SHOW DATABASES; ALTER USER 'root'@'localhost' IDENTIFIED
     fi
 done
 
-
+# sudo docker cp 00067dfe1fab:/load.json ~/Desktop/sem8/Distributed-Systems/asgn1/sha256.json
 exec python3 server.py
