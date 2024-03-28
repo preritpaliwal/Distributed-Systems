@@ -3,6 +3,7 @@ target:
 	docker compose up
 
 clean:
+	sudo docker rm -f $(sudo docker ps -qa)
 	docker compose down
-	docker rmi server
 	docker rmi load_balancer
+	docker rmi server
