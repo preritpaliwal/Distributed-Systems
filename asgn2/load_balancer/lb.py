@@ -10,7 +10,6 @@ app.config['DEBUG'] = True
 
 num_replicas = 3
 
-# mapper = consistentHash(num_servers = 2, num_slots = 512, num_virtual_servers = 9)
 bookkeeping = {"N": 0, "schema": {}, "shards": [], "servers": {}}
 shard_mappers = {}
 
@@ -137,7 +136,6 @@ def add():
             name = "Server"+str(random.randint(0,1000))
         bookkeeping["servers"][name] = v
         bookkeeping["N"]+=1
-        # TODO - add new server and hit its config endpoint
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
         time.sleep(2)
         data_payload = {}
@@ -148,13 +146,31 @@ def add():
             print(r,flush=True)
         except:
             print("Server not reachable", flush = True)
+        
         msg+=name
         cnt+=1
         if cnt == n:
             break
         else:
             msg+=" and "
+    
     bookkeeping["shards"] += new_shards
+    
+    for shard in new_shards:
+        shard_mappers[shard["Shard_id"]] = {
+            "mapper" : consistentHash(0, 512, 9),
+            "servers" : [],
+            "curr_idx" : 0,
+            "write_lock" : Lock(),
+            "read_lock" : Lock()
+        }
+    
+    for server, shards in bookkeeping["servers"].items():
+        for shard_id in shards:
+            if server not in shard_mappers[shard_id]["servers"]:
+                shard_mappers[shard_id]["servers"].append(server)
+                shard_mappers[shard_id]["mapper"].addServer(server)
+    
     
     return jsonify({"N":bookkeeping["N"],
                     "message": msg,
@@ -183,7 +199,41 @@ def rm():
         }), 200
         
     
-    # TODO - remove a server from the database
+    deleted_servers = []
+    cnt=0
+    for server in servers:
+        try:
+            if(server not in bookkeeping["servers"].keys()):
+                continue
+            os.popen(f'docker rm -f {server}').read()
+        except:
+            print(f"Server {server} not found", flush = True)
+        bookkeeping["N"]-=1
+        for shard_id in bookkeeping["servers"][server]:
+            shard_mappers[shard_id]["servers"].remove(server)
+            shard_mappers[shard_id]["mapper"].deleteServer(1,[server])
+        del bookkeeping["servers"][server]
+        cnt+=1
+        deleted_servers.append(server)
+        
+    while cnt<n:
+        server = random.choice(list(bookkeeping["servers"].keys()))
+        try:
+            os.popen(f'docker rm -f {server}').read()
+        except:
+            print(f"Server {server} not found", flush = True)
+        bookkeeping["N"]-=1
+        for shard_id in bookkeeping["servers"][server]:
+            shard_mappers[shard_id]["servers"].remove(server)
+            shard_mappers[shard_id]["mapper"].deleteServer(1,[server])
+        del bookkeeping["servers"][server]
+        cnt+=1
+        deleted_servers.append(server)
+    
+    return jsonify({
+            "message" : { "N" : n, "servers" : deleted_servers },
+            "status" : "successful"
+        }),200
 
 @app.route("/read", methods=["POST"])
 def read():

@@ -166,7 +166,6 @@ def write():
     for record in data:
         query = f"INSERT INTO studT_{shard} VALUES ({record['Stud_id']}, '{record['Stud_name']}', {record['Stud_marks']});"
         print(query,flush=True)
-        # TODO: For some unknown reason, the query is not getting executed
         cur.execute(query)
         curr_idx_shards[shard] += 1
 
