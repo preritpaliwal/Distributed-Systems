@@ -1,7 +1,7 @@
 from flask import Flask, request, json, jsonify
 from consistent_hashing import consistentHash
 from threading import Lock, Semaphore
-import random, logging, requests, os, time
+import random, logging, requests, os, time, threading
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
@@ -56,8 +56,6 @@ def init():
             name = s
         while name in bookkeeping["servers"].keys():
             name = "Server"+str(random.randint(0,1000))
-        bookkeeping["servers"][name] = v
-        bookkeeping["N"]+=1
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
         time.sleep(2)
         data_payload = {}
@@ -70,6 +68,8 @@ def init():
         except:
             print("Server not reachable", flush = True)
         cnt+=1
+        bookkeeping["N"]+=1
+        bookkeeping["servers"][name] = v
     
     while cnt<N:
         name = "Server"+str(random.randint(0,1000))
@@ -383,5 +383,48 @@ def delete():
         "status" : "success"
     }), 200
 
+def respawn_server():
+    while True:
+        for server, shards in bookkeeping["servers"].items():
+            try:
+                r = requests.get(f"http://{server}:5000/heartbeat")
+                # print(r,flush=True)
+            except:
+                print(f"Server {server} not reachable, respawning", flush = True)
+                try:
+                    os.popen(f'docker rm -f {server}').read()
+                except:
+                    print(f"{server} not found", flush = True)
+                
+                try:
+                    os.popen(f'docker run --name {server} --network mynet --network-alias {server} -d server:latest').read()
+                except:
+                    print(f"Could not respawn {server}", flush = True)
+                time.sleep(2)
+                try:
+                    r = requests.post(f"http://{server}:5000/config", json={"schema":bookkeeping["schema"], "shards":shards})
+                except:
+                    print(f"Could not configure {server}", flush = True)
+                print(r.json(),r.status_code,flush=True)
+                for shard_id in shards:
+                    for another_server in shard_mappers[shard_id]["servers"]:
+                        if another_server != server:
+                            try:
+                                r = requests.get(f"http://{another_server}:5000/copy",json={"shards":[shard_id]})
+                            except:
+                                print(f"{another_server} not reachable", flush = True)
+                            print(r.json(),r.status_code,flush=True)
+                            
+                            try:
+                                r = requests.post(f"http://{server}:5000/write",json={"shard":shard_id, "curr_idx":0, "data":r.json()["data"]})
+                            except:
+                                print(f"{server} not reachable", flush = True)
+                            print(r.json(),r.status_code,flush=True)
+                            print(f"Shard {shard_id} copied from {another_server} to {server}",flush=True)
+                            break
+        time.sleep(10)
+
 if __name__ == "__main__":
+    respawn_thread = threading.Thread(target=respawn_server)
+    respawn_thread.start()
     app.run( host = "0.0.0.0", port = 5000, debug = True)
