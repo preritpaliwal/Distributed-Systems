@@ -20,7 +20,11 @@ def has_keys(json_data : dict, keys : list):
             return False
     
     return True
-     
+
+def elect_primary_server(shard_id):
+    # TODO: implement better logic and do we need any mutual exclusion here?
+    shard_mappers[shard_id]["primary_server"] = shard_mappers[shard_id]["servers"][0]
+
 @app.route("/init", methods=["POST"])
 def init():
     payload = json.loads(request.data)
@@ -37,11 +41,17 @@ def init():
     
     for shard in shards:
         shard_mappers[shard["Shard_id"]] = {
-            "mapper" : consistentHash(0, 512, 9),
+            "hash_ring" : consistentHash(0, 512, 9),
+            "primary_server" : None,
             "servers" : [],
             "curr_idx" : 0,
-            "write_lock" : Lock(),
-            "read_lock" : Lock()
+            "old_readers_cnt" : 0,
+            "new_readers_cnt" : 0,
+            "writer_cnt" : 0,
+            "or_lock" : Lock(),
+            "nr_lock" : Lock(),
+            "w_lock" : Lock(),
+            "data_lock" : Lock()
         }
     
     bookkeeping["schema"]=schema
@@ -94,8 +104,11 @@ def init():
     for server, shards in bookkeeping["servers"].items():
         for shard_id in shards:
             shard_mappers[shard_id]["servers"].append(server)
-            shard_mappers[shard_id]["mapper"].addServer(server)
+            shard_mappers[shard_id]["hash_ring"].addServer(server)
 
+    for shard_id in shards:
+        elect_primary_server(shard_id)
+    
     return jsonify({
         "message" : "Configured Database",
         "status" : "success"
@@ -158,19 +171,27 @@ def add():
     
     for shard in new_shards:
         shard_mappers[shard["Shard_id"]] = {
-            "mapper" : consistentHash(0, 512, 9),
+            "hash_ring" : consistentHash(0, 512, 9),
+            "primary_server" : None,
             "servers" : [],
             "curr_idx" : 0,
-            "write_lock" : Lock(),
-            "read_lock" : Lock()
+            "old_readers_cnt" : 0,
+            "new_readers_cnt" : 0,
+            "writer_cnt" : 0,
+            "or_lock" : Lock(),
+            "nr_lock" : Lock(),
+            "w_lock" : Lock(),
+            "data_lock" : Lock()
         }
     
     for server, shards in bookkeeping["servers"].items():
         for shard_id in shards:
             if server not in shard_mappers[shard_id]["servers"]:
                 shard_mappers[shard_id]["servers"].append(server)
-                shard_mappers[shard_id]["mapper"].addServer(server)
+                shard_mappers[shard_id]["hash_ring"].addServer(server)
     
+    for shard_id in new_shards:
+        elect_primary_server(shard_id)
     
     return jsonify({"N":bookkeeping["N"],
                     "message": msg,
@@ -211,7 +232,7 @@ def rm():
         bookkeeping["N"]-=1
         for shard_id in bookkeeping["servers"][server]:
             shard_mappers[shard_id]["servers"].remove(server)
-            shard_mappers[shard_id]["mapper"].deleteServer(1,[server])
+            shard_mappers[shard_id]["hash_ring"].deleteServer(1,[server])
         del bookkeeping["servers"][server]
         cnt+=1
         deleted_servers.append(server)
@@ -225,19 +246,62 @@ def rm():
         bookkeeping["N"]-=1
         for shard_id in bookkeeping["servers"][server]:
             shard_mappers[shard_id]["servers"].remove(server)
-            shard_mappers[shard_id]["mapper"].deleteServer(1,[server])
+            shard_mappers[shard_id]["hash_ring"].deleteServer(1,[server])
         del bookkeeping["servers"][server]
         cnt+=1
         deleted_servers.append(server)
+    
+    for shard_ids in shard_mappers.keys():
+        if shard_mappers[shard_id]["primary_server"] in deleted_servers:
+            elect_primary_server(shard_ids)
     
     return jsonify({
             "message" : { "N" : n, "servers" : deleted_servers },
             "status" : "successful"
         }),200
 
+def add_reader(shard_id):
+    shard_mappers[shard_id]["nr_lock"].acquire()
+    shard_mappers[shard_id]["new_readers_cnt"] += 1
+    shard_mappers[shard_id]["nr_lock"].release()
+    
+    shard_mappers[shard_id]["w_lock"].acquire()
+    while shard_mappers[shard_id]["writer_cnt"] > 0:
+        shard_mappers["Shard_id"]["w_lock"].release()
+        time.sleep(0.1)
+        shard_mappers["Shard_id"]["w_lock"].acquire()
+    shard_mappers[shard_id]["or_lock"].acquire()
+    shard_mappers[shard_id]["old_readers_cnt"] += 1
+    shard_mappers[shard_id]["or_lock"].release()
+    
+    shard_mappers[shard_id]["nr_lock"].acquire()
+    shard_mappers[shard_id]["new_readers_cnt"] -= 1
+    shard_mappers[shard_id]["nr_lock"].release()
+    
+    shard_mappers[shard_id]["w_lock"].release()
+
+def remove_reader(shard_id):
+    shard_mappers[shard_id]["or_lock"].acquire()
+    shard_mappers[shard_id]["old_readers_cnt"] -= 1
+    shard_mappers[shard_id]["or_lock"].release()
+
+def read_target(shard_id, ql, qhi, data):
+    requestID = random.randint(100000, 999999)
+    server, rSlot = shard_mappers[shard_id]["hash_ring"].addRequest(requestID)
+    data_payload = {"shard":shard_id, "Stud_id":{"low":ql, "high":qhi}}
+    add_reader(shard_id)
+    try:
+        url=f"http://{server}:5000/read"
+        r = requests.post(url, json=data_payload)
+        print(r,flush=True)
+        data[shard_id] = r.json()["data"]
+    except:
+        print("Server not reachable", flush = True)
+    remove_reader(shard_id)
+    shard_mappers[shard_id]["hash_ring"].clearRequest(rSlot)
+
 @app.route("/read", methods=["POST"])
 def read():
-
     payload = json.loads(request.data)
     
     if not has_keys(payload, ["Stud_id"]) or not has_keys(payload["Stud_id"], ["low", "high"]):
@@ -250,39 +314,70 @@ def read():
     high = int(payload["Stud_id"]["high"])
     
     shards_used = []
-    data = []
+    data = {}
+    threads = []
     for shard in bookkeeping["shards"]:
-        
         lo = shard["Stud_id_low"]
         hi = shard["Stud_id_low"] + shard["Shard_size"]
-        
-        
-        if not (lo>high or hi< low):
+        if not (lo>high or hi<low):
             shards_used.append(shard["Shard_id"])
+            shard_id = shard["Shard_id"]
             ql = max(lo, low)
             qhi = min(hi, high)
-            shard_id = shard["Shard_id"]
-            requestID = random.randint(100000, 999999)
-            server, rSlot = shard_mappers[shard_id]["mapper"].addRequest(requestID)
-            data_payload = {"shard":shard_id, "Stud_id":{"low":ql, "high":qhi}}
-            if not shard_mappers[shard_id]["write_lock"].locked():
-                shard_mappers[shard_id]["read_lock"].acquire()
-                try:
-                    url=f"http://{server}:5000/read"
-                    r = requests.post(url, json=data_payload)
-                    print(r,flush=True)
-                    data.extend(r.json()["data"])
-                except:
-                    print("Server not reachable", flush = True)
-                    
-                shard_mappers[shard_id]["read_lock"].release()
-            shard_mappers[shard_id]["mapper"].clearRequest(rSlot)
+            
+            threads.append(threading.Thread(target=read_target, args=(shard_id, ql, qhi, data)))
+            threads[-1].start()
+    
+    for thread in threads:
+        thread.join()
+    
+    ret_data = []
+    for shard_id in shards_used:
+        ret_data.extend(data[shard_id])
+    
     return jsonify({
             "shards_queried": shards_used,
-            "data": data,
+            "data": ret_data,
             "status": "success"
         }),200
+
+def add_writer(shard_id):
+    shard_mappers[shard_id]["or_lock"].acquire()
+    while shard_mappers[shard_id]["old_readers_cnt"] > 0 :
+        shard_mappers[shard_id]["or_lock"].release()
+        time.sleep(0.1)
+        shard_mappers[shard_id]["or_lock"].acquire()
+    shard_mappers[shard_id]["or_lock"].release()
     
+    shard_mappers[shard_id]["w_lock"].acquire()
+    shard_mappers[shard_id]["writer_cnt"] += 1
+    shard_mappers[shard_id]["w_lock"].release()
+    
+def remove_writer(shard_id):
+    shard_mappers[shard_id]["w_lock"].acquire()
+    shard_mappers[shard_id]["writer_cnt"] -= 1
+    shard_mappers[shard_id]["w_lock"].release()
+
+def write_target(shard_id, records):
+    data_payload = {
+        "shard" : shard_id,
+        "curr_idx" : shard_mappers[shard_id]["curr_idx"],
+        "data" : records
+    }
+    add_writer(shard_id)
+    primary_server = shard_mappers[shard_id]["primary_server"]
+    data_payload_log = data_payload
+    data_payload_log["mode"] = "log"
+    r = requests.post(f"http://{primary_server}:5000/write", json=data_payload_log)
+    for server in shard_mappers[shard_id]["servers"]:
+            if server == primary_server:
+                continue
+            r = requests.post(f"http://{server}:5000/write", json=data_payload)
+    data_payload_log["mode"] = "exec"
+    r = requests.post(f"http://{primary_server}:5000/write", json=data_payload_log)
+    remove_writer(shard_id)
+    shard_mappers[shard_id]["curr_idx"] += len(records)
+
 @app.route("/write", methods=["POST"])
 def write():
     payload = json.loads(request.data)
@@ -298,26 +393,16 @@ def write():
                     shard_data[shard_id].append(record)
                 else:
                     shard_data[shard_id] = [ record ]
-                    
+    
+    threads = []
     for shard_id, records in shard_data.items():
-        
-        shard_mappers[shard_id]["read_lock"].acquire()
-        shard_mappers[shard_id]["write_lock"].acquire()
-        data_payload = {
-            "shard" : shard_id,
-            "curr_idx" : shard_mappers[shard_id]["curr_idx"],
-            "data" : records
-        }
-        for server in shard_mappers[shard_id]["servers"]:
-            try:
-                r = requests.post(f"http://{server}:5000/write", json=data_payload)
-                # print(r,server)
-            except:
-                print(f"Server {server} not reachable", flush = True)
-        shard_mappers[shard_id]["curr_idx"] += len(records)
-        shard_mappers[shard_id]["read_lock"].release()
-        shard_mappers[shard_id]["write_lock"].release()
-
+        # do in a parallel thread
+        threads.append(threading.Thread(target=write_target, args=(shard_id, records)))
+        threads[-1].start()
+    
+    for thread in threads:
+        thread.join()
+    
     return jsonify({
         "message" : f"{len(data)} Data entries added",
         "status" : "success"
@@ -336,19 +421,18 @@ def update():
             shard_id = shard["Shard_id"]
             data_payload = {"shard":shard_id,"Stud_id":stud_id, "data":data}
             
-            shard_mappers[shard_id]["read_lock"].acquire()
-            shard_mappers[shard_id]["write_lock"].acquire()
-            
+            add_writer(shard_id)
+            primary_server = shard_mappers[shard_id]["primary_server"]
+            data_payload_log = data_payload
+            data_payload_log["mode"] = "log"
+            r = requests.post(f"http://{primary_server}:5000/update", json=data_payload_log)
             for server in shard_mappers[shard_id]["servers"]:
-                try:
-                    r = requests.put(f"http://{server}:5000/update", json=data_payload)
-                    print(r,flush=True)
-                except:
-                    print(f"update at {server} for shard {shard_id} failed")    
-                
-            shard_mappers[shard_id]["read_lock"].release()
-            shard_mappers[shard_id]["write_lock"].release()    
-            
+                    if server == primary_server:
+                        continue
+                    r = requests.post(f"http://{server}:5000/update", json=data_payload)
+            data_payload_log["mode"] = "exec"
+            r = requests.post(f"http://{primary_server}:5000/update", json=data_payload_log)
+            remove_writer(shard_id)
             
     return jsonify({
             "message" : f"Data updated for Stud_id : {stud_id} updated",
@@ -367,18 +451,18 @@ def delete():
             shard_id = shard["Shard_id"]
             data_payload = {"shard":shard_id,"Stud_id":stud_id}
             
-            shard_mappers[shard_id]["read_lock"].acquire()
-            shard_mappers[shard_id]["write_lock"].acquire()
-            
+            add_writer(shard_id)
+            primary_server = shard_mappers[shard_id]["primary_server"]
+            data_payload_log = data_payload
+            data_payload_log["mode"] = "log"
+            r = requests.post(f"http://{primary_server}:5000/del", json=data_payload_log)
             for server in shard_mappers[shard_id]["servers"]:
-                try:
-                    r = requests.delete(f"http://{server}:5000/del", json=data_payload)
-                    print(r,flush=True)
-                except:
-                    print(f"deletion at {server} for shard {shard_id}, Student {stud_id} failed.")
-                    
-            shard_mappers[shard_id]["read_lock"].release()
-            shard_mappers[shard_id]["write_lock"].release() 
+                    if server == primary_server:
+                        continue
+                    r = requests.post(f"http://{server}:5000/del", json=data_payload)
+            data_payload_log["mode"] = "exec"
+            r = requests.post(f"http://{primary_server}:5000/del", json=data_payload_log)
+            remove_writer(shard_id)
     
     return jsonify({
         "message" : f"Data entry with Stud_id:{stud_id} removed from all replicas",

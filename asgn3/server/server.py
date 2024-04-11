@@ -1,4 +1,5 @@
 from flask import Flask, json, jsonify, request
+from logs import Logger
 import sys, os, socket
 import mysql.connector
 
@@ -23,11 +24,22 @@ name_to_dataType = {
     "String":"varchar(255)"
 }
 
+logger = Logger("log.txt")
+
 def has_keys(json_data : dict, keys : list):
     for key in keys:
         if key not in json_data.keys():
             return False
     return True
+
+def execute_query(query:str, mode="both"):
+    if mode == "log":
+        logger.append(query)
+    elif mode == "exec":
+        cur.execute(query)
+    else:
+        cur.execute(query)
+        logger.append(query)
 
 # curl -X POST "http://127.0.0.1:5000/config" -H "Content-Type: application/json" -d @config.json
 @app.route("/config",methods=["POST"])
@@ -56,7 +68,7 @@ def config():
     for sh in shards:
         final_query = f"CREATE TABLE studT_{sh} {query};"
         try:
-            cur.execute(final_query)
+            execute_query(final_query)
         except:
             return jsonify({"status" : "failure"}), 402 # Bad Request
         msg += f"{serverID}:{sh}, "
@@ -137,6 +149,11 @@ def write():
 
     shard = payload["shard"]
     curr_idx = payload["curr_idx"]
+    
+    mode = "both"
+    if "mode" in payload.keys():
+        mode = payload["mode"]
+    
     if(curr_idx_shards[shard] != curr_idx):
         return jsonify({
                     "message" : "Data entries not added, curr_idx mismatch",
@@ -147,7 +164,7 @@ def write():
     data = payload["data"]
     for record in data:
         query = f"INSERT INTO studT_{shard} VALUES ({record['Stud_id']}, '{record['Stud_name']}', {record['Stud_marks']});"
-        cur.execute(query)
+        execute_query(query,mode)
         curr_idx_shards[shard] += 1
 
     return jsonify({
@@ -166,13 +183,17 @@ def update():
     if not has_keys(payload, ["shard", "Stud_id", "data"]):
         return jsonify({"status" : "failure"}), 400 # Bad Request
 
+    
     shard = payload["shard"]
     stud_id = payload["Stud_id"]
     data = payload["data"]
     stud_name=data["Stud_name"]
     stud_marks=data["Stud_marks"]
     query = f"UPDATE studT_{shard} SET Stud_name=\"{stud_name}\",Stud_marks={stud_marks} WHERE Stud_id = {stud_id};"
-    cur.execute(query)
+    mode = "both"
+    if "mode" in payload.keys():
+        mode = payload["mode"]
+    execute_query(query,mode)
     
     return jsonify({
                    "message" : f"Data entry for Stud_id : {stud_id} updated",
@@ -194,7 +215,10 @@ def delete():
     stud_id = payload["Stud_id"]
 
     query = f"DELETE FROM studT_{shard} WHERE Stud_id = {stud_id};"
-    cur.execute(query)
+    mode = "both"
+    if "mode" in payload.keys():
+        mode = payload["mode"]
+    execute_query(query,mode)
 
     return jsonify({
                    "message" : f"Data entry with Stud_id : {stud_id} removed",
