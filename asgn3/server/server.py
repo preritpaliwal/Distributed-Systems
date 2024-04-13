@@ -1,22 +1,13 @@
 from flask import Flask, json, jsonify, request
-from logs import Logger
+from threading import Lock
 import sys, os, socket
 import mysql.connector
-
 serverID = 1
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
 
-# mysql parser
-conn = mysql.connector.connect(
-  host="localhost",
-  user="root",
-  password="Mysql@123",
-  auth_plugin="mysql_native_password",
-  autocommit=True
-)
-cur = conn.cursor()
+
 curr_idx_shards = {}
 
 name_to_dataType = {
@@ -24,7 +15,45 @@ name_to_dataType = {
     "String":"varchar(255)"
 }
 
+def connect_to_db():
+    # mysql parser
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="Mysql@123",
+        auth_plugin="mysql_native_password",
+        autocommit=True,
+        database = "studentdb"
+    )
+    cur = conn.cursor()
+    return cur, conn
+
+def disconnect_from_db(cur,conn):
+    cur.close()
+    conn.close()
+class Logger:
+    def __init__(self, log_file) -> None:
+        self.log_file = log_file
+        self.curr_offset = 0
+    
+    def append(self, log_entry:str):
+        self.curr_offset+=len(str(log_entry))
+        with open(self.log_file, "a") as f:
+            f.write(log_entry+"\n")
+    
+    def read(self):
+        logs = []
+        with open(self.log_file, "r") as f:
+            while True:
+                line = f.readline().split("\n")[0]
+                if not line:
+                    break
+                logs.append(line)
+        return logs
+    
 logger = Logger("log.txt")
+# database_lock = Lock()
+print("logger created",flush=True)  
 
 def has_keys(json_data : dict, keys : list):
     for key in keys:
@@ -32,14 +61,26 @@ def has_keys(json_data : dict, keys : list):
             return False
     return True
 
+
 def execute_query(query:str, mode="both"):
-    if mode == "log":
-        logger.append(query)
-    elif mode == "exec":
-        cur.execute(query)
-    else:
-        cur.execute(query)
-        logger.append(query)
+    cur,conn = connect_to_db()
+    try:
+        if mode == "log":
+            logger.append(query)
+        elif mode == "exec":
+            cur.execute(query)
+        else:
+            logger.append(query)
+            cur.execute(query)
+    except Exception as e:
+        # database_lock.release()
+        disconnect_from_db(cur,conn)
+        print(f"Error: {e}",flush=True)
+        return False
+    disconnect_from_db(cur,conn)
+    # database_lock.release()
+    return True
+        # raise e
 
 # curl -X POST "http://127.0.0.1:5000/config" -H "Content-Type: application/json" -d @config.json
 @app.route("/config",methods=["POST"])
@@ -67,9 +108,7 @@ def config():
     msg = ""
     for sh in shards:
         final_query = f"CREATE TABLE studT_{sh} {query};"
-        try:
-            execute_query(final_query)
-        except:
+        if not execute_query(final_query):
             return jsonify({"status" : "failure"}), 402 # Bad Request
         msg += f"{serverID}:{sh}, "
         curr_idx_shards[sh] = 0
@@ -81,8 +120,10 @@ def config():
 
 @app.route("/tables",methods=["GET"])
 def tables():
+    cur,conn = connect_to_db()
     cur.execute("Show tables;")
     tabs = cur.fetchall()
+    disconnect_from_db(cur,conn)
     return jsonify({"data":tabs}),200
 
 
@@ -106,11 +147,11 @@ def copy():
     
     shards = payload["shards"]
     data = {}
-    
+    cur,conn = connect_to_db()
     for shard in shards:
         cur.execute(f"SELECT * FROM studT_{shard}")
         data[shard] = [ {"Stud_id" : record[0], "Stud_name" : record[1], "Stud_marks" : record[2]}  for record in  cur.fetchall() ]
-    
+    disconnect_from_db(cur,conn)
     data["status"] = "success"
     return jsonify(data), 200
 
@@ -130,11 +171,13 @@ def read():
     lo = payload["Stud_id"]["low"]
     hi = payload["Stud_id"]["high"]
 
+    cur,conn = connect_to_db()
     query = f"SELECT * FROM studT_{shard} WHERE Stud_id >= {lo} AND Stud_id <= {hi};"
     cur.execute(query)
-
+    data = cur.fetchall()
+    disconnect_from_db(cur,conn)
     return jsonify({
-                   "data" : cur.fetchall(),
+                   "data" : data,
                    "status" : "success"
     }), 200
 
@@ -164,7 +207,14 @@ def write():
     data = payload["data"]
     for record in data:
         query = f"INSERT INTO studT_{shard} VALUES ({record['Stud_id']}, '{record['Stud_name']}', {record['Stud_marks']});"
-        execute_query(query,mode)
+        if not execute_query(query,mode):
+            return jsonify({
+                    "message" : "Data entries not added",
+                    "current_idx" : curr_idx_shards[shard],
+                    "status" : "failure"
+            }), 401
+        if mode == "log":
+            continue
         curr_idx_shards[shard] += 1
 
     return jsonify({
@@ -193,7 +243,11 @@ def update():
     mode = "both"
     if "mode" in payload.keys():
         mode = payload["mode"]
-    execute_query(query,mode)
+    if not execute_query(query,mode):
+        return jsonify({
+                   "message" : f"Data entry for Stud_id : {stud_id} not updated",
+                   "status" : "failure"
+        }), 401
     
     return jsonify({
                    "message" : f"Data entry for Stud_id : {stud_id} updated",
@@ -218,7 +272,11 @@ def delete():
     mode = "both"
     if "mode" in payload.keys():
         mode = payload["mode"]
-    execute_query(query,mode)
+    if not execute_query(query,mode):
+        return jsonify({
+                   "message" : f"Data entry with Stud_id : {stud_id} not removed",
+                   "status" : "failure"
+        }), 401
 
     return jsonify({
                    "message" : f"Data entry with Stud_id : {stud_id} removed",
@@ -233,7 +291,14 @@ def other(path):
 
 
 if __name__ == "__main__":
-    
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="Mysql@123",
+        auth_plugin="mysql_native_password",
+        autocommit=True
+    )
+    cur = conn.cursor()
     cur.execute("show databases;")
     # Get the results
     databases = cur.fetchall()
@@ -253,5 +318,5 @@ if __name__ == "__main__":
         shard = table.split("_")[1]
         cur.execute(f"SELECT * FROM {table}")
         curr_idx_shards[shard] = len(cur.fetchall())
-    
+    disconnect_from_db(cur,conn)
     app.run( host = "0.0.0.0", port = 5000, debug = True)

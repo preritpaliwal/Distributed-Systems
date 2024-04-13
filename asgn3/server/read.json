@@ -1,4 +1,4 @@
 {
-    "shard":"sh2",
+    "shard":"sh1",
     "Stud_id": {"low":0, "high":6000}
 }
