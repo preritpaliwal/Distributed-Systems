@@ -6,20 +6,25 @@ import random, logging, requests, os, time, threading
 app = Flask(__name__)
 app.config['DEBUG'] = True
 
+# TODO: put a lock on these also
 bookkeeping = {"N": 0, "schema": {}, "shards": [], "servers": {}}
 shard_mappers = {}
 
 def has_keys(json_data : dict, keys : list):
-    
     for key in keys:
         if key not in json_data.keys():
             return False
-    
     return True
 
 def elect_primary_server(shard_id):
-    # TODO: implement better logic and do we need any mutual exclusion here?
-    shard_mappers[shard_id]["primary_server"] = shard_mappers[shard_id]["servers"][0]
+    r = requests.post(f"http://sm:5000/election", json={"shard_id":shard_id})
+    if r.status_code == 200:
+        shard_mappers[shard_id]["primary_server"] = r.json()["primary_server"]
+        for shard in bookkeeping["shards"]:
+            if shard["Shard_id"] == shard_id:
+                shard["primary_server"] = shard_mappers[shard_id]["primary_server"]
+        return 0
+    return 1
 
 @app.route("/init", methods=["POST"])
 def init():
@@ -52,49 +57,41 @@ def init():
     bookkeeping["schema"]=schema
     bookkeeping["shards"]=shards
     
-    
     cnt=0
     for s,v in servers.items():
+        # Get name
         if '[' in s:
             name = "Server"+str(random.randint(0,1000))
         else:
             name = s
         while name in bookkeeping["servers"].keys():
             name = "Server"+str(random.randint(0,1000))
-        try:
-            os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
-        except Exception as e:
-            print(e,flush=True)
-        time.sleep(2)
-        data_payload = {}
-        data_payload["schema"] = schema
-        data_payload["shards"] = v
-        url=f"http://{name}:5000/config"
-        r = requests.post(url, json=data_payload)
-        print("r = ", r,flush=True)
-        cnt+=1
-        bookkeeping["N"]+=1  
-        bookkeeping["servers"][name] = v
+        
+        # add sever
+        data_payload = {"name":name,"shard_ids":v,"schema":schema}
+        r = requests.post("http://sm:5000/add_server",json=data_payload)
+        if r.status_code == 200:
+            cnt+=1
+            bookkeeping["N"]+=1  
+            bookkeeping["servers"][name] = v
+        else:
+            print(f"failed to start {name}",flush=True)
+            return jsonify({"message":f"failed to start {name}","status":"failed"}),201
     
     while cnt<N:
         name = "Server"+str(random.randint(0,1000))
         while name in bookkeeping["servers"].keys():
             name = "Server"+str(random.randint(0,1000))
         cur_shards = ["sh" + str(random.randint(1,len(shards))),"sh"+str(random.randint(1,len(shards)))]
-        bookkeeping["servers"][name] = cur_shards
-        bookkeeping["N"]+=1
-        try:
-            os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
-        except Exception as e:
-            print(e,flush=True)        
-        time.sleep(2)
-        data_payload = {}
-        data_payload["schema"] = schema
-        data_payload["shards"] = cur_shards
-        url=f"http://{name}:5000/config"
-        r = requests.post(url, json=data_payload)
-        print(r,flush=True)
-        cnt+=1
+        data_payload = {"name":name,"shard_ids":cur_shards,"schema":schema}
+        r = requests.post("http://sm:5000/add_server",json=data_payload)
+        if r.status_code==200:
+            cnt+=1
+            bookkeeping["servers"][name] = cur_shards
+            bookkeeping["N"]+=1
+        else:
+            print(f"failed to start {name}",flush=True)
+            return jsonify({"message":f"failed to start {name}","status":"failed"}),201
         
     for server, shard_list in bookkeeping["servers"].items():
         for shard_id in shard_list:
@@ -102,8 +99,8 @@ def init():
             shard_mappers[shard_id]["hash_ring"].addServer(server)
 
     for shard in bookkeeping["shards"]:
-        elect_primary_server(shard["Shard_id"])
-        shard["primary_server"] = shard_mappers[shard["Shard_id"]]["primary_server"]
+        if elect_primary_server(shard["Shard_id"])!=0:
+            print(f"Failed to elect primary server for {shard['Shard_id']}",flush=True)
     
     return jsonify({
         "message" : "Configured Database",
@@ -143,20 +140,19 @@ def add():
             name = s
         while name in bookkeeping["servers"].keys():
             name = "Server"+str(random.randint(0,1000))
-        bookkeeping["servers"][name] = v
-        bookkeeping["N"]+=1
-        os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
-        time.sleep(2)
-        data_payload = {}
-        data_payload["schema"] = bookkeeping["schema"]
-        data_payload["shards"] = v
-        r = requests.post(f"http://{name}:5000/config", json=data_payload)
-        msg+=name
-        cnt+=1
-        if cnt == n:
-            break
+        
+        r = requests.post("http://sm:5000/add_server",json={"name":name,"shard_ids":v,"schema":bookkeeping["schema"]})
+        if r.status_code == 200:
+            msg+=name
+            bookkeeping["servers"][name] = v
+            bookkeeping["N"]+=1
+            cnt+=1
+            if cnt == n:
+                break
+            else:
+                msg+=" and "
         else:
-            msg+=" and "
+            print(f"failed to start {name}",flush=True)
     
     bookkeeping["shards"] += new_shards
     
@@ -184,9 +180,7 @@ def add():
     for shard in bookkeeping["shards"]:
         if shard["primary_server"] is None:
             elect_primary_server(shard["Shard_id"])
-            shard["primary_server"] = shard_mappers[shard["Shard_id"]]["primary_server"]
 
-    
     return jsonify({"N":bookkeeping["N"],
                     "message": msg,
                     "status": "successful"
@@ -194,7 +188,6 @@ def add():
 
 @app.route("/rm", methods=["DELETE"])
 def rm():
-
     payload = json.loads(request.data)
     
     if not has_keys(payload, ["n", "servers"]):
@@ -206,50 +199,51 @@ def rm():
     n = int(payload["n"])
     servers = payload["servers"]
     
-    
     if n < len(servers):
         return jsonify({
             "message" : "<Error> wrong input n < len(servers).",
             "status" : "failure"
         }), 200
-        
     
     deleted_servers = []
     cnt=0
     for server in servers:
-        try:
-            if(server not in bookkeeping["servers"].keys()):
-                continue
-            os.popen(f'docker rm -f {server}').read()
-        except:
-            print(f"Server {server} not found", flush = True)
+        if(server not in bookkeeping["servers"].keys()):
+            continue
+        
+        r = requests.delete(f"http://sm:5000/rm/{server}")
+        if r.status_code != 200:
+            print(f"Failed to remove {server}",flush=True)
+            continue
+        
         bookkeeping["N"]-=1
         for shard_id in bookkeeping["servers"][server]:
+            if shard_mappers[shard_id]["primary_server"] == server:
+                elect_primary_server(shard_id)
             shard_mappers[shard_id]["servers"].remove(server)
             shard_mappers[shard_id]["hash_ring"].deleteServer(1,[server])
         del bookkeeping["servers"][server]
         cnt+=1
         deleted_servers.append(server)
         
+    
     while cnt<n:
         server = random.choice(list(bookkeeping["servers"].keys()))
-        try:
-            os.popen(f'docker rm -f {server}').read()
-        except:
-            print(f"Server {server} not found", flush = True)
+        
+        r = requests.delete(f"http://sm:5000/rm/{server}")
+        if r.status_code != 200:
+            print(f"Failed to remove {server}",flush=True)
+            continue
+        
         bookkeeping["N"]-=1
         for shard_id in bookkeeping["servers"][server]:
+            if shard_mappers[shard_id]["primary_server"] == server:
+                elect_primary_server(shard_id)
             shard_mappers[shard_id]["servers"].remove(server)
             shard_mappers[shard_id]["hash_ring"].deleteServer(1,[server])
         del bookkeeping["servers"][server]
         cnt+=1
         deleted_servers.append(server)
-    
-    for shard in bookkeeping["shards"]:
-        if shard["primary_server"] in deleted_servers:
-            elect_primary_server(shard["Shard_id"])
-            shard["primary_server"] = shard_mappers[shard["Shard_id"]]["primary_server"]
-
     
     return jsonify({
             "message" : { "N" : n, "servers" : deleted_servers },
@@ -361,7 +355,7 @@ def remove_writer(shard_id):
     shard_mappers[shard_id]["writer_cnt"] -= 1
     shard_mappers[shard_id]["w_lock"].release()
 
-def write_target(t_id,shard_id, records):
+def write_target(shard_id, records):
     data_payload = {
         "shard" : shard_id,
         "curr_idx" : shard_mappers[shard_id]["curr_idx"],
@@ -370,16 +364,51 @@ def write_target(t_id,shard_id, records):
     }
     add_writer(shard_id)
     primary_server = shard_mappers[shard_id]["primary_server"]
+    success_count = 0.0
+    success_status = {}
     r = requests.post(f"http://{primary_server}:5000/write", json=data_payload)
+    if r.status_code == 200:
+        success_count += 0.5
     data_payload["mode"] = "both"
     for server in shard_mappers[shard_id]["servers"]:
-            if server == primary_server:
-                continue
-            r = requests.post(f"http://{server}:5000/write", json=data_payload)
+        if server == primary_server:
+            continue
+        r = requests.post(f"http://{server}:5000/write", json=data_payload)
+        success_status[server] = r.status_code
+        if r.status_code == 200:
+            success_count += 1
     data_payload["mode"] = "exec"
     r = requests.post(f"http://{primary_server}:5000/write", json=data_payload)
+    success_status[primary_server] = r.status_code
+    if r.status_code == 200:
+        success_count += 0.5
+    success = False
+    if success_count >= len(shard_mappers[shard_id]["servers"])/2:
+        success = True
+    if success:
+        # make it write on servers it failed
+        if success_status[primary_server]!=200:
+            # elect new primary
+            if elect_primary_server(shard_id)!=0:
+                print("failed to elect new primary",flush=True)
+        
+        for server, status in success_status.items():
+            if status!=200:
+                r = requests.post(f"http://sm:5000/respawn/{server}")
+                if r.status_code!=200:
+                    print(f"failed to respawn {server}",flush=True)
+            
+        shard_mappers[shard_id]["curr_idx"] += len(records)
+    else:
+        # roll back
+        stud_ids = [record["Stud_id"] for record in records]
+        for server, status in success_status.items():
+            if status==200:
+                for stud_id in stud_ids:
+                    r = requests.delete(f"http://{server}:5000/del", json={"shard":shard_id,"Stud_id":stud_id, "mode":"both"})
+                    if r.status_code!=200:
+                        print(f"failed to rollback {server}",flush=True)
     remove_writer(shard_id)
-    shard_mappers[shard_id]["curr_idx"] += len(records)
 
 @app.route("/write", methods=["POST"])
 def write():
@@ -399,7 +428,6 @@ def write():
     threads = []
     id = 0
     for shard_id, records in shard_data.items():
-        # do in a parallel thread
         threads.append(threading.Thread(target=write_target, args=(id,shard_id, records)))
         threads[id].start()
         id+=1
@@ -411,6 +439,61 @@ def write():
         "message" : f"{len(data)} Data entries added",
         "status" : "success"
         }), 200
+
+def handle_rollback(endpoint, shard_id, data_payload):
+    
+    read_payload = {"Stud_id":{"low":data_payload["Stud_id"],"high":data_payload["Stud_id"]}}
+    r = requests.post(f"http://localhost:5000/read", json=read_payload)
+    record = r.json()["data"][0]
+    
+    add_writer(shard_id)
+    primary_server = shard_mappers[shard_id]["primary_server"]
+    success_count = 0.0
+    success_status = {}
+    r = requests.put(f"http://{primary_server}:5000/{endpoint}", json=data_payload)
+    if r.status_code == 200:
+        success_count += 0.5
+    data_payload["mode"]="both"
+    for server in shard_mappers[shard_id]["servers"]:
+        if server == primary_server:
+            continue
+        r = requests.put(f"http://{server}:5000/{endpoint}", json=data_payload)
+        if r.status_code == 200:
+            success_count += 1
+        success_status[server] = r.status_code
+    data_payload["mode"] = "exec"
+    r = requests.put(f"http://{primary_server}:5000/{endpoint}", json=data_payload)
+    if r.status_code == 200:
+        success_count += 0.5
+    success_status[primary_server] = r.status_code
+    success = False
+    if success_count >= len(shard_mappers[shard_id]["servers"])/2:
+        success = True
+    if success:
+        # make it write on servers it failed
+        if success_status[primary_server]!=200:
+            # elect new primary
+            if elect_primary_server(shard_id)!=0:
+                print("failed to elect new primary",flush=True)
+        
+        for server, status in success_status.items():
+            if status!=200:
+                r = requests.post(f"http://sm:5000/respawn/{server}")
+                if r.status_code!=200:
+                    print(f"failed to respawn {server}",flush=True)
+    else:
+        # roll back
+        for server, status in success_status.items():
+            if status == 200:
+                if endpoint.startswith("update"):
+                    r = requests.put(f"http://{server}:5000/{endpoint}", json={"shard":shard_id,"Stud_id":record["Stud_id"],"data":record,"mode":"both"})
+                    if r.status_code!=200:
+                        print(f"failed to rollback {server}",flush=True)
+                else:
+                    r = requests.post(f"http://{server}:5000/write",json={"shard":shard_id,"data":[record]})
+                    if r.status_code!=200:
+                        print(f"failed to rollback {server}",flush=True)
+    remove_writer(shard_id)
 
 @app.route("/update", methods=["PUT"])
 def update():
@@ -425,20 +508,7 @@ def update():
             shard_id = shard["Shard_id"]
             data_payload = {"shard":shard_id,"Stud_id":stud_id, "data":data, "mode":"log" }
             
-            add_writer(shard_id)
-            primary_server = shard_mappers[shard_id]["primary_server"]
-            r = requests.put(f"http://{primary_server}:5000/update", json=data_payload)
-            print(r,flush=True)
-            data_payload["mode"]="both"
-            for server in shard_mappers[shard_id]["servers"]:
-                    if server == primary_server:
-                        continue
-                    r = requests.put(f"http://{server}:5000/update", json=data_payload)
-                    print(r,flush=True)
-            data_payload["mode"] = "exec"
-            r = requests.put(f"http://{primary_server}:5000/update", json=data_payload)
-            print(r,flush=True)
-            remove_writer(shard_id)
+            handle_rollback("update", shard_id, data_payload)
             
     return jsonify({
             "message" : f"Data updated for Stud_id : {stud_id} updated",
@@ -457,57 +527,12 @@ def delete():
             shard_id = shard["Shard_id"]
             data_payload = {"shard":shard_id,"Stud_id":stud_id,"mode":"log"}
             
-            add_writer(shard_id)
-            primary_server = shard_mappers[shard_id]["primary_server"]
-            r = requests.delete(f"http://{primary_server}:5000/del", json=data_payload)
-            data_payload["mode"]="both"
-            for server in shard_mappers[shard_id]["servers"]:
-                    if server == primary_server:
-                        continue
-                    r = requests.delete(f"http://{server}:5000/del", json=data_payload)
-            data_payload["mode"] = "exec"
-            r = requests.delete(f"http://{primary_server}:5000/del", json=data_payload)
-            remove_writer(shard_id)
+            handle_rollback("del", shard_id, data_payload)
     
     return jsonify({
         "message" : f"Data entry with Stud_id:{stud_id} removed from all replicas",
         "status" : "success"
     }), 200
 
-def respawn_server():
-    while True:
-        
-        for server, shards in bookkeeping["servers"].items():
-            try:
-                r = requests.get(f"http://{server}:5000/heartbeat")
-                print(r,flush=True)
-            except:
-                print(f"Server {server} not reachable, respawning", flush = True)
-                try:
-                    os.popen(f'docker rm -f {server}').read()
-                except:
-                    print(f"{server} not found", flush = True)
-                
-                try:
-                    os.popen(f'docker run --name {server} --network mynet --network-alias {server} -d server:latest').read()
-                except:
-                    print(f"Could not respawn {server}", flush = True)
-                time.sleep(2)
-
-                r = requests.post(f"http://{server}:5000/config", json={"schema":bookkeeping["schema"], "shards":shards})
-                time.sleep(2)
-                
-                for shard_id in shards:
-                    for another_server in shard_mappers[shard_id]["servers"]:
-                        if another_server != server:
-                            r = requests.get(f"http://{another_server}:5000/copy",json={"shards":[shard_id]})
-                            data  = r.json()[shard_id]
-                            r = requests.post(f"http://{server}:5000/write",json={"shard":shard_id, "curr_idx":0, "data":data})
-                            print(f"Shard {shard_id} copied from {another_server} to {server}",flush=True)
-                            break
-        time.sleep(10)
-
 if __name__ == "__main__":
-    respawn_thread = threading.Thread(target=respawn_server)
-    respawn_thread.start()
     app.run( host = "0.0.0.0", port = 5000, debug = True)
