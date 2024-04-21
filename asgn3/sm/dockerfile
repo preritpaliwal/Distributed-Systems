@@ -10,7 +10,7 @@ RUN apt-get -y install sudo
 RUN pip install --upgrade pip
 
 
-COPY ./shard_manager.py ./shard_manager.py
+COPY ./sm.py ./sm.py
 COPY ./requirements.txt ./requirements.txt
 
 RUN pip install -r requirements.txt
@@ -18,4 +18,4 @@ RUN pip install -r requirements.txt
 EXPOSE 5000
 
 ENTRYPOINT  [ "python3" ]
-CMD [ "shard_manager.py"]
+CMD [ "sm.py"]

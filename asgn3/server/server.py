@@ -6,6 +6,7 @@ app = Flask(__name__)
 app.config['DEBUG'] = True
 
 name_to_dataType = {"Number":"int","String":"varchar(255)"}
+logger = {}
 
 def connect_to_db():
     # mysql parser
@@ -31,6 +32,8 @@ class Logger:
         self.index = 0
         self.uncommited_entries = {}
         self.lock = Lock()
+        with self.lock:
+            open(self.log_file,"a").close()
     
     def append(self, log_entry:str,increment = 1):
         with self.lock:
@@ -47,14 +50,18 @@ class Logger:
         with self.lock:
             with open(self.log_file, "r") as f:
                 while True:
-                    line = f.readline().split("\n")[0]
-                    if not line:
+                    try:
+                        line = f.readline().split("\n")[0]
+                        if not line:
+                            break
+                        query, index = line.split("^")
+                        if query.startswith("committed"):
+                            committed_logs.append(uncommited_logs[int(index)])
+                        else:
+                            uncommited_logs[int(index)] = query
+                    except Exception as e:
+                        print(f"Error: {e}",flush=True)
                         break
-                    query, index = line.split("^")
-                    if query.startswith("committed"):
-                        committed_logs.append(uncommited_logs[int(index)])
-                    else:
-                        uncommited_logs[int(index)] = query
         return committed_logs
 
     def reset(self):
@@ -73,7 +80,6 @@ class Logger:
             with open(self.log_file, "a") as f:
                 f.write(log +"\n")
 
-logger = {}
 
 def has_keys(json_data : dict, keys : list):
     for key in keys:
@@ -90,6 +96,8 @@ def execute_query(query:str, shard_id, mode="both"):
         elif mode == "exec":
             cur.execute(query)
             logger[shard_id].commit(query)
+        elif mode == "None":
+            cur.execute(query)
         else:
             logger[shard_id].append(query)
             cur.execute(query)
@@ -148,11 +156,11 @@ def config():
     
     msg = ""
     for sh in shards:
+        logger[sh] = Logger(f"shard_{sh}.log")
         final_query = f"CREATE TABLE studT_{sh} {query};"
-        if not execute_query(final_query,sh):
+        if not execute_query(final_query,sh,"None"):
             return jsonify({"status" : "failure"}), 402 # Bad Request
         msg += f"{sh}, "
-        logger[sh] = Logger(f"shard_{sh}.log")
     msg+=" configured"
     return jsonify({
                     "message" : msg,

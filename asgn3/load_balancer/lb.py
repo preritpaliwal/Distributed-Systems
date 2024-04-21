@@ -1,14 +1,16 @@
 from flask import Flask, request, json, jsonify
 from consistent_hashing import consistentHash
-from threading import Lock, Semaphore
-import random, logging, requests, os, time, threading
+from threading import Lock
+import random, requests, time, threading
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
 
 # TODO: put a lock on these also
 bookkeeping = {"N": 0, "schema": {}, "shards": [], "servers": {}}
+bookkeeping_lock = Lock()
 shard_mappers = {}
+shard_mappers_lock = Lock()
 
 def has_keys(json_data : dict, keys : list):
     for key in keys:
@@ -16,15 +18,93 @@ def has_keys(json_data : dict, keys : list):
             return False
     return True
 
+def update_primary_server_info(shard_id, primary_server):
+    print(f"setting primary servers as {primary_server} for shard {shard_id}",flush=True)
+    shard_mappers_lock.acquire()
+    shard_mappers[shard_id]["primary_server"] = primary_server
+    shard_mappers_lock.release()
+    bookkeeping_lock.acquire()
+    for shard in bookkeeping["shards"]:
+        if shard["Shard_id"] == shard_id:
+            shard["primary_server"] = shard_mappers[shard_id]["primary_server"]
+    bookkeeping_lock.release()
+
 def elect_primary_server(shard_id):
     r = requests.post(f"http://sm:5000/election", json={"shard_id":shard_id})
     if r.status_code == 200:
-        shard_mappers[shard_id]["primary_server"] = r.json()["primary_server"]
-        for shard in bookkeeping["shards"]:
-            if shard["Shard_id"] == shard_id:
-                shard["primary_server"] = shard_mappers[shard_id]["primary_server"]
+        update_primary_server_info(shard_id, r.json()["primary_server"])
         return 0
     return 1
+
+@app.route("/set_primary", methods=["POST"])
+def set_primary():
+    payload = json.loads(request.data)
+    shard_id = payload["shard_id"]
+    primary_server = payload["primary_server"]
+    update_primary_server_info(shard_id, primary_server)
+    return jsonify({
+        "message" : f"Primary server for {shard_id} set to {primary_server}",
+        "status" : "success"
+    }), 200
+
+def add_server(s,v,schema):
+    wait = random.random()*3
+    time.sleep(wait)
+    if '[' in s:
+        name = "Server"+str(random.randint(0,1000))
+    else:
+        name = s
+    
+    bookkeeping_lock.acquire()
+    while name in bookkeeping["servers"].keys():
+        bookkeeping_lock.release()
+        name = "Server"+str(random.randint(0,1000))
+        bookkeeping_lock.acquire()
+    bookkeeping_lock.release()
+    
+    # add sever
+    data_payload = {"name":name,"shard_ids":v,"schema":schema}
+    try:
+        r = requests.post("http://sm:5000/add_server",json=data_payload)
+        if r.status_code == 200:
+            bookkeeping_lock.acquire()
+            bookkeeping["N"]+=1  
+            bookkeeping["servers"][name] = v
+            bookkeeping_lock.release()
+        else:
+            print(f"failed to start {name}",flush=True)
+    except Exception as e:
+        print(e,flush=True)
+    
+    # update shard info
+    shard_mappers_lock.acquire()
+    for shard_id in v:
+        if shard_id not in shard_mappers.keys():
+            shard_mappers[shard_id] = {
+                "hash_ring" : consistentHash(0, 512, 9),
+                "primary_server" : None,
+                "servers" : [],
+                "curr_idx" : 0,
+                "old_readers_cnt" : 0,
+                "new_readers_cnt" : 0,
+                "writer_cnt" : 0,
+                "or_lock" : Lock(),
+                "nr_lock" : Lock(),
+                "w_lock" : Lock(),
+                "data_lock" : Lock()
+            }
+        
+        shard_mappers[shard_id]["servers"].append(name)
+        shard_mappers[shard_id]["hash_ring"].addServer(name)   
+        
+        if shard_mappers[shard_id]["primary_server"] is None:
+            shard_mappers_lock.release()
+            if elect_primary_server(shard_id)!= 0:
+                print(f"failed to elect primary server for shard {shard_id}",flush=True)
+            shard_mappers_lock.acquire()
+    shard_mappers_lock.release()
+        
+
 
 @app.route("/init", methods=["POST"])
 def init():
@@ -39,68 +119,25 @@ def init():
     shards = payload["shards"]
     servers = payload["servers"]
     
-    for shard in shards:
-        shard_mappers[shard["Shard_id"]] = {
-            "hash_ring" : consistentHash(0, 512, 9),
-            "primary_server" : None,
-            "servers" : [],
-            "curr_idx" : 0,
-            "old_readers_cnt" : 0,
-            "new_readers_cnt" : 0,
-            "writer_cnt" : 0,
-            "or_lock" : Lock(),
-            "nr_lock" : Lock(),
-            "w_lock" : Lock(),
-            "data_lock" : Lock()
-        }
-    
+    bookkeeping_lock.acquire()
     bookkeeping["schema"]=schema
     bookkeeping["shards"]=shards
-    
+    bookkeeping_lock.release()
     cnt=0
+    threads = []
+    
     for s,v in servers.items():
-        # Get name
-        if '[' in s:
-            name = "Server"+str(random.randint(0,1000))
-        else:
-            name = s
-        while name in bookkeeping["servers"].keys():
-            name = "Server"+str(random.randint(0,1000))
-        
-        # add sever
-        data_payload = {"name":name,"shard_ids":v,"schema":schema}
-        r = requests.post("http://sm:5000/add_server",json=data_payload)
-        if r.status_code == 200:
-            cnt+=1
-            bookkeeping["N"]+=1  
-            bookkeeping["servers"][name] = v
-        else:
-            print(f"failed to start {name}",flush=True)
-            return jsonify({"message":f"failed to start {name}","status":"failed"}),201
+        threads.append(threading.Thread(target=lambda: add_server(s,v,schema)))
+        threads[cnt].start()
+        cnt+=1
     
     while cnt<N:
-        name = "Server"+str(random.randint(0,1000))
-        while name in bookkeeping["servers"].keys():
-            name = "Server"+str(random.randint(0,1000))
-        cur_shards = ["sh" + str(random.randint(1,len(shards))),"sh"+str(random.randint(1,len(shards)))]
-        data_payload = {"name":name,"shard_ids":cur_shards,"schema":schema}
-        r = requests.post("http://sm:5000/add_server",json=data_payload)
-        if r.status_code==200:
-            cnt+=1
-            bookkeeping["servers"][name] = cur_shards
-            bookkeeping["N"]+=1
-        else:
-            print(f"failed to start {name}",flush=True)
-            return jsonify({"message":f"failed to start {name}","status":"failed"}),201
-        
-    for server, shard_list in bookkeeping["servers"].items():
-        for shard_id in shard_list:
-            shard_mappers[shard_id]["servers"].append(server)
-            shard_mappers[shard_id]["hash_ring"].addServer(server)
+        threads.append(threading.Thread(target=lambda: add_server("[]",v,schema)))
+        threads[cnt].start()
+        cnt+=1
 
-    for shard in bookkeeping["shards"]:
-        if elect_primary_server(shard["Shard_id"])!=0:
-            print(f"Failed to elect primary server for {shard['Shard_id']}",flush=True)
+    for thread in threads:
+        thread.join()
     
     return jsonify({
         "message" : "Configured Database",
@@ -109,7 +146,10 @@ def init():
 
 @app.route("/status", methods=["GET"])
 def status():
-    return jsonify(bookkeeping) , 200
+    bookkeeping_lock.acquire()
+    bookkeeping_copy = bookkeeping.copy()
+    bookkeeping_lock.release()
+    return jsonify(bookkeeping_copy) , 200
 
 @app.route("/add",methods=["POST"])
 def add():
@@ -122,7 +162,6 @@ def add():
         }), 200
     
     n = int(payload["n"])
-    new_shards = payload["new_shards"]
     servers = payload["servers"]
     
     if n > len(servers):
@@ -132,64 +171,24 @@ def add():
         }), 200
     
     cnt=0
-    msg = "Added "
+    threads = []
+    schema = bookkeeping["schema"]
     for s,v in servers.items():
-        if '[' in s:
-            name = "Server"+str(random.randint(0,1000))
-        else:
-            name = s
-        while name in bookkeeping["servers"].keys():
-            name = "Server"+str(random.randint(0,1000))
-        
-        r = requests.post("http://sm:5000/add_server",json={"name":name,"shard_ids":v,"schema":bookkeeping["schema"]})
-        if r.status_code == 200:
-            msg+=name
-            bookkeeping["servers"][name] = v
-            bookkeeping["N"]+=1
-            cnt+=1
-            if cnt == n:
-                break
-            else:
-                msg+=" and "
-        else:
-            print(f"failed to start {name}",flush=True)
+        threads.append(threading.Thread(target=lambda: add_server(s,v,schema)))
+        threads[cnt].start()
+        cnt+=1
     
-    bookkeeping["shards"] += new_shards
-    
-    for shard in new_shards:
-        shard_mappers[shard["Shard_id"]] = {
-            "hash_ring" : consistentHash(0, 512, 9),
-            "primary_server" : None,
-            "servers" : [],
-            "curr_idx" : 0,
-            "old_readers_cnt" : 0,
-            "new_readers_cnt" : 0,
-            "writer_cnt" : 0,
-            "or_lock" : Lock(),
-            "nr_lock" : Lock(),
-            "w_lock" : Lock(),
-            "data_lock" : Lock()
-        }
-    
-    for server, shards in bookkeeping["servers"].items():
-        for shard_id in shards:
-            if server not in shard_mappers[shard_id]["servers"]:
-                shard_mappers[shard_id]["servers"].append(server)
-                shard_mappers[shard_id]["hash_ring"].addServer(server)
-    
-    for shard in bookkeeping["shards"]:
-        if shard["primary_server"] is None:
-            elect_primary_server(shard["Shard_id"])
+    for thread in threads:
+        thread.join()
 
     return jsonify({"N":bookkeeping["N"],
-                    "message": msg,
+                    "message": "Added new servers",
                     "status": "successful"
                     }),200
 
 @app.route("/rm", methods=["DELETE"])
 def rm():
     payload = json.loads(request.data)
-    
     if not has_keys(payload, ["n", "servers"]):
         return jsonify({
             "message" : "<Error> Payload not formatted correctly.",
@@ -275,7 +274,7 @@ def remove_reader(shard_id):
     shard_mappers[shard_id]["old_readers_cnt"] -= 1
     shard_mappers[shard_id]["or_lock"].release()
 
-def read_target(t_id, shard_id, ql, qhi, data):
+def read_target(shard_id, ql, qhi, data):
     requestID = random.randint(100000, 999999)
     server, rSlot = shard_mappers[shard_id]["hash_ring"].addRequest(requestID)
     data_payload = {"shard":shard_id, "Stud_id":{"low":ql, "high":qhi}}
@@ -312,7 +311,7 @@ def read():
             ql = max(lo, low)
             qhi = min(hi, high)
             
-            threads.append(threading.Thread(target=read_target, args=(id,shard_id, ql, qhi, data)))
+            threads.append(threading.Thread(target=lambda: read_target(shard_id, ql, qhi, data)))
             threads[id].start()
             id+=1
     
@@ -428,7 +427,7 @@ def write():
     threads = []
     id = 0
     for shard_id, records in shard_data.items():
-        threads.append(threading.Thread(target=write_target, args=(id,shard_id, records)))
+        threads.append(threading.Thread(target=lambda: write_target(shard_id, records)))
         threads[id].start()
         id+=1
     
@@ -443,7 +442,7 @@ def write():
 def handle_rollback(endpoint, shard_id, data_payload):
     
     read_payload = {"Stud_id":{"low":data_payload["Stud_id"],"high":data_payload["Stud_id"]}}
-    r = requests.post(f"http://localhost:5000/read", json=read_payload)
+    r = requests.post(f"http://load_balancer:5000/read", json=read_payload)
     record = r.json()["data"][0]
     
     add_writer(shard_id)
