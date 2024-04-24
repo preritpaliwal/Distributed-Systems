@@ -8,6 +8,17 @@ Contributors:
 ## Introduction
 This assignment implements a sharded database system capable of distributing a single table, StudT, across multiple server containers. Each shard manages a limited number of entries, enabling scalability and parallel read capabilities. The system utilizes a `Write-Ahead Logging (WAL)` mechanism to maintain consistency among replicas of the shards distributed across various servers.
 
+
+## Write-Ahead Logging (WAL)
+- `Logging Changes Before Writing to Disk`: All changes to the database are first recorded in a log file before being applied to the database files on disk. This log file is stored in a durable storage medium, ensuring data durability.
+- `Sequential Writes`: Changes are written sequentially to the log, which enhances efficiency, especially during large transactions or concurrent transactions.
+- `Recovery Process`: In the event of a crash or restart, the system reads the WAL file(s) to redo operations not fully committed to the database files and to undo changes from incomplete transactions, maintaining data integrity.
+
+## WAL for Replication and Consistency
+- `Replication Log Shipping`: A primary database server is designated for each shard, responsible for writing changes to its WAL. These WAL records are then shipped to replica servers, where they are replayed to apply the same changes, ensuring consistency across replicas.
+- `Synchronous Replication`: The primary shard waits for the majority of replicas to commit data before committing its copy, ensuring strong consistency. In case of primary shard failure, a new primary is chosen from the replicated shards with the most updated log entries. Upon recovery, the system copies all shards from the primary shards to ensure consistent data recovery from crash failures.
+
+
 ## Usage
 - `sudo make`
 
