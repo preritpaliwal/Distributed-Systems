@@ -20,19 +20,25 @@ def replicate_shard(shard_id, server_name):
     shard_info_lock.acquire()
     primary_server = shard_info[shard_id]["primary_server"]
     shard_info_lock.release()
-    print(f"replicating shard {shard_id} from ps: {primary_server} to new_s: {server_name}",flush=True)
     if primary_server == None :
         return 0
     url = f"http://{primary_server}:5000/get_log/{shard_id}"
-    print(url)
-    r = requests.get(url)
+    try:
+        r = requests.get(url)
+    except Exception as e:
+        print(e,flush=True)
+        return 1
     if r.status_code!=200:
         print(f"Failed to get log from primary server {primary_server}, {r}",flush=True)
         return 1
     logs = r.json()["logs"]
     if len(logs)==0:
         return 0
-    r = requests.post(f"http://{server_name}:5000/apply_log",json={"shard":shard_id, "logs":logs})
+    try:
+        r = requests.post(f"http://{server_name}:5000/apply_log",json={"shard":shard_id, "logs":logs})
+    except Exception as e:
+        print(e,flush=True)
+        return 2
     if r.status_code!=200:
         print(f"Failed to apply log to new server {server_name}, {r.json()},{r.status_code}",flush=True)
         return 2
@@ -42,7 +48,8 @@ def spawn_and_config_server_contianer(name, schema, shard_ids):
     try:
         os.popen(f'docker rm -f {name}').read()
     except Exception as e:
-        print(e,flush=True)
+        # print(e,flush=True)
+        pass
     time.sleep(1)
     try:
         os.popen(f'docker run --name {name} --network mynet --network-alias {name} -d server:latest').read()
@@ -54,7 +61,11 @@ def spawn_and_config_server_contianer(name, schema, shard_ids):
     data_payload["schema"] = schema
     data_payload["shards"] = shard_ids
     url=f"http://{name}:5000/config"
-    r = requests.post(url, json=data_payload)
+    try:
+        r = requests.post(url, json=data_payload)
+    except Exception as e:
+        print(e,flush=True)
+        return 1
     time.sleep(2)
     if r.status_code != 200:
         return 1
@@ -95,7 +106,7 @@ def add_server():
     
     server_info_lock.acquire()
     server_info[name] = {"shards":shard_ids,"schema":schema}
-    server_info[name]["alive"] = True
+    server_info[name]["keep_alive"] = True
     server_info_lock.release()
     Thread(target=lambda: respawn_loop(name)).start()
     return jsonify({
@@ -125,7 +136,6 @@ def election():
         pass
     election_indexes = {}
     max_votes = 0
-    print(f"getting votes for shard {shard_id} from servers: ",servers,flush=True)
     for server in servers:
         try:
             r = requests.get(f"http://{server}:5000/election_index/{shard_id}")
@@ -148,18 +158,24 @@ def election():
 @app.route("/rm/<server_name>",methods = ["DELETE"])
 def rm(server_name):
     # kill the respawn thread as well
-    try:
-        os.popen(f'docker rm -f {server_name}').read()
-    except:
-        print(f"Server {server_name} not found", flush = True)
     server_info_lock.acquire()
-    server_info[server_name]["alive"] = False
+    server_info[server_name]["keep_alive"] = False
     server_info_lock.release()
     shard_info_lock.acquire()
     for shard_id in shard_info.keys():
         if server_name in shard_info[shard_id]["servers"]:
             shard_info[shard_id]["servers"].remove(server_name)
     shard_info_lock.release()
+    server_info_lock.acquire()
+    while server_name in server_info.keys():
+        server_info_lock.release()
+        time.sleep(0.2)
+        server_info_lock.acquire()
+    server_info_lock.release()
+    try:
+        os.popen(f'docker rm -f {server_name}').read()
+    except:
+        print(f"Server {server_name} not found", flush = True)
     return jsonify({"message":"Server removed successfully."}),200
 
 @app.route("/respawn/<server_name>",methods = ["POST"])
@@ -170,10 +186,15 @@ def respawn(server_name):
 def respwan_server(server_name):
     try:
         r = requests.get(f"http://{server_name}:5000/heartbeat")
-        if r.status_code == 200:
+        if r.status_code == 200 :
             return 
     except Exception as e:
         print(e,flush=True)
+        server_info_lock.acquire()
+        keep_alive = server_info[server_name]["keep_alive"]
+        server_info_lock.release()
+        if not keep_alive :
+            return
         tries = 5
         server_info_lock.acquire()
         shard_ids = server_info[server_name]["shards"]
@@ -184,12 +205,20 @@ def respwan_server(server_name):
             primary_server = shard_info[shard_id]["primary_server"]
             shard_info_lock.release()
             if primary_server == server_name:
-                r = requests.post(f"http://sm:5000/election",json={"shard_id":shard_id})
+                try:
+                    r = requests.post(f"http://sm:5000/election",json={"shard_id":shard_id})
+                except Exception as e:
+                    print(e,flush=True)
+                    return
                 if r.status_code != 200:
                     print(f"Failed to elect primary server for {shard_id}.",flush=True)
                     return
                 print(f"Primary server for {shard_id} is {r.json()['primary_server']}",flush=True)
-                r = requests.post(f"http://load_balancer:5000/set_primary",json={"shard_id":shard_id,"primary_server":r.json()["primary_server"]})
+                try:
+                    r = requests.post(f"http://load_balancer:5000/set_primary",json={"shard_id":shard_id,"primary_server":r.json()["primary_server"]})
+                except Exception as e:
+                    print(e,flush=True)
+                    return
                 if r.status_code != 200:
                     print(f"Failed to set primary server for {shard_id}.",flush=True)
                     return
@@ -203,10 +232,10 @@ def respwan_server(server_name):
 
 def respawn_loop(server_name):
     server_info_lock.acquire()
-    while server_info[server_name]["alive"]:
+    while server_info[server_name]["keep_alive"]:
         server_info_lock.release()
-        time.sleep(5)
         respwan_server(server_name)
+        time.sleep(5)
         server_info_lock.acquire()
     del server_info[server_name]
     server_info_lock.release()
