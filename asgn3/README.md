@@ -34,6 +34,7 @@ This assignment implements a sharded database system capable of distributing a s
 
 ## Server
 A HTTP server supporting the endpoints `/config`, `/copy`, `/read`, `/write`, `/update` and `/del`, It handles the shards of the `StudT (Stud id: Number, Stud name: String, Stud marks:Number)` table.
+- `/heartbeat` endpoint supports `GET` requests and is utilized to check whether the server is running or has crashed via regular requests from the load balancer.
 - `/config` endpoint supports `POST` requests and is utilized to initialize shard tables in the server database to configure the shards.
 - `/copy` endpoint supports `GET` requests and returns all data entries corresponding to the specified shards in the payload.
 - `/read` endpoint supports `POST` requests and reads all entries from the shard specified in the payload along with a range of Stud_ids.
@@ -41,7 +42,7 @@ A HTTP server supporting the endpoints `/config`, `/copy`, `/read`, `/write`, `/
 - `/update` endpoint supports `PUT` requests and updates a specified data entry - expects only one entry to be updated in the server container along with Shard_id.
 - `/del` endpoint supports `DELETE` requests and deletes a specified data entry - expects only one entry to be deleted in the server container along with Shard_id.
 
-##HashRing
+## HashRing
 The HashRing class implements a distributed hash ring using consistent hashing - as implemented in Assignment 1. Consistent hashing is used to map keys to servers in this system efficiently. 
 
 ## Load Balancer
@@ -61,7 +62,21 @@ The HashRing class implements a distributed hash ring using consistent hashing -
 # Design choices 
 
 - Every server maintains log file for each shard.
-- Entries in log file contain byte offset (as index), CRC and data (key?)
+- The following endpoints have been implemented for internal communication of the application components.
+
+### Server
+- `/election_index/<shard_id>` : This endpoint supports `GET` requests and is utilized to fetch the candidate servers during leader election for a shard.
+- `/get_log/<shard_id>` : This endpoint supports `POST` requests and is utilized to fetch the logs for a desired shard. 
+- `/apply_log` : This endpoint supports `POST` requests and is utilized to update the logs for a desired shard. 
+
+### Shard Manager
+- `/add_server` : This endpoint supports `POST` requests and is utilized to add a new server, initialise it with the appropriate database schema and transfer the specified shards to it.  
+- `/election` :  This endpoint supports `POST` requests and is utilized to conduct the election process for a shard.
+- `/rm/<server>` : This endpoint supports `DELETE` requests and is utilized to delete a server from the fleet and prevent it from respawning.
+- `/respawn/<server>` : This endpoint supports `POST` requests and is utilized to respawn a crashed server. 
+
+### Load Balancer
+- `set_primary` : This endpoint supports `POST` requests and is utilized to update/set the primary server for a shard after leader election concludes. 
 
 # Analysis
 The `Analysis` folder contains scripts to do the following analysis:
