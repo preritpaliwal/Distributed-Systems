@@ -5,7 +5,6 @@ RUN apt-get update
 RUN apt-get install -y python3
 RUN apt-get install -y python3-pip
 RUN apt-get update
-RUN apt-get install -y docker.io
 RUN apt-get -y install sudo
 RUN pip install --upgrade pip
 

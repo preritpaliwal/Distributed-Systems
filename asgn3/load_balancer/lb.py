@@ -51,8 +51,6 @@ def set_primary():
     }), 200
 
 def add_server(t_id,s,v,schema, result):
-    wait = random.random()*3
-    time.sleep(wait)
     if '[' in s:
         name = "Server"+str(random.randint(0,1000))
     else:
