@@ -176,6 +176,7 @@ def add():
     
     n = int(payload["n"])
     servers = payload["servers"]
+    new_shards = payload["new_shards"]
     
     if n > len(servers):
         return jsonify({
@@ -205,6 +206,7 @@ def add():
         
     bookkeeping_lock.acquire()
     N = bookkeeping["N"]
+    bookkeeping["shards"]+=new_shards
     bookkeeping_lock.release()
     return jsonify({"N":N,
                     "message": "Added new servers",
@@ -230,7 +232,8 @@ def remove_server(server):
     for shard_id in shard_ids:
         if shard_mappers[shard_id]["primary_server"] == server:
             shard_mappers_lock.release()
-            elect_primary_server(shard_id)
+            if elect_primary_server(shard_id)!=0:
+                print(f"failed to elect primary server for shard {shard_id}",flush=True)
             shard_mappers_lock.acquire()
         shard_mappers[shard_id]["servers"].remove(server)
         shard_mappers[shard_id]["hash_ring"].deleteServer(1,[server])
@@ -557,8 +560,6 @@ def handle_rollback(endpoint, shard_id, data_payload):
         print(e,flush=True)
         return 201
     record = r.json()["data"][0]
-    
-    print(f"Rolling back {endpoint} for Stud_id : {record}",flush=True)
     
     add_writer(shard_id)
     shard_mappers_lock.acquire()

@@ -146,6 +146,7 @@ def election():
             max_votes = max(max_votes, election_indexes[server])
         except Exception as e:
             print(e,flush=True)
+    primary_server=None
     for server, votes in election_indexes.items():
         if max_votes == votes:
             shard_info_lock.acquire()
